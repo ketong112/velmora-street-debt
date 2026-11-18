@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="VELMORA — Street Debt: an open-world crime game. Rook Marlowe owes the Harbormaster fifty grand — collect cash drops, steal cars, outrun the law, and pay it down across three missions in Port Velmora.">
+<link rel="icon" href="data:,">
+<title>VELMORA — Street Debt</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #10151d; }
+  #game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+  /* Read aloud, never shown: the status line screen readers announce. */
+  #status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+  /* HUD: anchored to the corners, inset for notches and overscan. */
+  #hud { position: fixed; inset: 0; pointer-events: none; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; color: #f2f4f7; }
+  .hud-box { position: absolute; padding: max(14px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(14px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); }
+  #hud-left { bottom: 0; left: 0; }
+  #hud-cash { font-size: clamp(26px, 3.4vw, 38px); font-weight: 800; letter-spacing: 0.5px; color: #37d67a; text-shadow: 0 2px 8px rgba(0,0,0,0.7); }
+  #hud-cash.bump { animation: bump 0.25s ease-out; }
+  @keyframes bump { 0% { transform: scale(1.18); } 100% { transform: scale(1); } }
+  #hud-debt { font-size: clamp(12px, 1.4vw, 15px); color: #c8ccd4; text-shadow: 0 1px 4px rgba(0,0,0,0.8); margin-top: 2px; }
+  #hud-health { margin-top: 10px; display: flex; align-items: center; gap: 8px; }
+  #hud-health-label { font-size: 13px; font-weight: 700; text-shadow: 0 1px 4px rgba(0,0,0,0.8); }
+  #hud-health-bar { width: min(180px, 30vw); height: 12px; background: rgba(0,0,0,0.55); border: 1px solid rgba(255,255,255,0.35); border-radius: 6px; overflow: hidden; }
+  #hud-health-fill { height: 100%; width: 100%; background: #4ade80; transition: width 0.2s ease-out; }
+  #hud-health-text { font-size: 13px; font-weight: 700; text-shadow: 0 1px 4px rgba(0,0,0,0.8); }
+  #hud-right { top: 0; right: 0; text-align: right; }
+  #hud-wanted-label { font-size: 11px; letter-spacing: 2px; color: #c8ccd4; text-shadow: 0 1px 4px rgba(0,0,0,0.8); }
+  #hud-stars { font-size: clamp(20px, 2.6vw, 28px); letter-spacing: 3px; color: #8b93a3; text-shadow: 0 2px 8px rgba(0,0,0,0.7); }
+  #hud-stars.hot { color: #ffd166; }
+  #hud-map-wrap { position: absolute; right: max(16px, env(safe-area-inset-right)); bottom: max(16px, env(safe-area-inset-bottom)); border: 2px solid rgba(255,255,255,0.35); border-radius: 8px; overflow: hidden; box-shadow: 0 4px 16px rgba(0,0,0,0.5); }
+  /* The minimap canvas is 180x180 backing pixels and 180 CSS pixels: one backing
+     pixel per CSS pixel, so the map stays sharp without a devicePixelRatio pass. */
+  #hud-minimap { display: block; width: 180px; height: 180px; }
+  #hud-toast { position: absolute; top: max(72px, env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); background: rgba(12,16,24,0.82); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; padding: 10px 18px; font-size: 15px; font-weight: 600; opacity: 0; transition: opacity 0.25s ease; white-space: nowrap; max-width: 92vw; overflow: hidden; text-overflow: ellipsis; }
+  #hud-toast.show { opacity: 1; }
+  #hud-speed { margin-top: 6px; font-size: clamp(18px, 2.2vw, 24px); font-weight: 800; color: #f2f4f7; text-shadow: 0 2px 8px rgba(0,0,0,0.7); }
+  #hud-siren { margin-top: 4px; font-size: 13px; font-weight: 800; letter-spacing: 1px; color: #ff5a5a; text-shadow: 0 1px 4px rgba(0,0,0,0.8); opacity: 0; }
+  #hud-siren.show { opacity: 1; animation: pulse 0.7s ease-in-out infinite; }
+  #hud-objective { position: absolute; top: max(14px, env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); font-size: clamp(12px, 1.5vw, 15px); font-weight: 700; color: #f2c94c; text-shadow: 0 1px 4px rgba(0,0,0,0.8); background: rgba(12,16,24,0.6); border-radius: 6px; padding: 6px 12px; opacity: 0; transition: opacity 0.25s ease; white-space: nowrap; max-width: 92vw; overflow: hidden; text-overflow: ellipsis; }
+  #hud-objective.show { opacity: 1; }
+  #hud-arrow { position: absolute; top: max(52px, env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); width: 0; height: 0; border-left: 11px solid transparent; border-right: 11px solid transparent; border-bottom: 18px solid #f2c94c; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.7)); opacity: 0; transition: opacity 0.25s ease; }
+  #hud-arrow.show { opacity: 0.95; }
+  #hud-ammo { margin-top: 6px; font-size: 14px; font-weight: 700; color: #ffd166; text-shadow: 0 1px 4px rgba(0,0,0,0.8); }
+  /* Below the toast: the toast sits at 72px and runs ~40px tall, so a timer at 88px
+     would sit on top of a toast like "Parcel secured" — 120px clears it. */
+  #hud-timer { position: absolute; top: max(120px, env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); font-size: clamp(18px, 2.2vw, 24px); font-weight: 800; color: #f2c94c; text-shadow: 0 2px 8px rgba(0,0,0,0.7); opacity: 0; transition: opacity 0.25s ease; }
+  #hud-timer.show { opacity: 1; }
+  #hud-timer.urgent { color: #ff5a5a; }
+
+  /* Full-screen overlays: title and pause. */
+  .screen { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: linear-gradient(180deg, rgba(8,10,16,0.42), rgba(8,10,16,0.72)); font-family: system-ui, -apple-system, "Segoe UI", sans-serif; color: #f2f4f7; }
+  .screen.hidden { display: none; }
+  /* Title sits top-left, compact, so the city and Rook stay visible on the right. */
+  #screen-title { align-items: flex-start; justify-content: flex-start; padding: 40px; background: linear-gradient(105deg, rgba(8,10,16,0.62), rgba(8,10,16,0.18) 55%, rgba(8,10,16,0.05)); }
+  #screen-title .panel { max-width: 440px; padding: 26px 30px; }
+  #screen-title .panel h1 { font-size: clamp(38px, 6vw, 56px); }
+  .panel { background: rgba(12,16,24,0.82); border: 1px solid rgba(255,255,255,0.16); border-radius: 14px; padding: 34px 44px; text-align: center; max-width: min(620px, 92vw); box-shadow: 0 12px 48px rgba(0,0,0,0.6); }
+  .panel h1 { margin: 0; font-size: clamp(44px, 8vw, 72px); letter-spacing: 6px; color: #ffb347; text-shadow: 0 4px 24px rgba(255,179,71,0.35); }
+  .panel h2 { margin: 2px 0 0; font-size: clamp(15px, 2.4vw, 21px); letter-spacing: 8px; color: #37d67a; }
+  .panel p { margin: 18px 0 0; font-size: clamp(14px, 1.8vw, 17px); line-height: 1.55; color: #c8ccd4; }
+  .panel .controls { margin-top: 20px; font-size: clamp(13px, 1.6vw, 15px); color: #eef1f5; line-height: 1.9; }
+  .panel .controls b { color: #ffd166; }
+  .panel .prompt { margin-top: 24px; font-size: clamp(16px, 2vw, 19px); font-weight: 700; color: #f2c94c; animation: pulse 1.6s ease-in-out infinite; }
+  .panel button { margin-top: 18px; padding: 12px 26px; font-size: 16px; font-weight: 700; font-family: inherit; color: #10151d; background: #f2c94c; border: none; border-radius: 8px; cursor: pointer; }
+  .panel button:hover { background: #ffd166; }
+  .panel button.hidden { display: none; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+  .panel h1.small { font-size: clamp(34px, 6vw, 52px); }
+</style>
+<!-- The one import map the page holds (the gate allows at most one): "three" is the
+     vendored three.module.min.js under game/vendor/, never a CDN. -->
+<script type="importmap">
+{ "imports": { "three": "./vendor/three.module.min.js" } }
+</script>
+</head>
+<body>
+<noscript><p style="color:#f2f4f7;font-family:system-ui,sans-serif;padding:40px">VELMORA needs JavaScript to play — please enable it and reload.</p></noscript>
+<canvas id="game" aria-label="Velmora Street Debt: walk Port Velmora as Rook Marlowe and collect cash drops to pay a fifty thousand debt"></canvas>
+<p id="status" role="status" aria-live="polite"></p>
+
+<div id="hud" aria-hidden="true">
+  <div class="hud-box" id="hud-left">
+    <div id="hud-cash">$0</div>
+    <div id="hud-debt">Debt $50,000 left</div>
+    <div id="hud-health">
+      <span id="hud-health-label">HP</span>
+      <div id="hud-health-bar"><div id="hud-health-fill"></div></div>
+      <span id="hud-health-text">100</span>
+    </div>
+    <div id="hud-speed"></div>
+    <div id="hud-ammo"></div>
+  </div>
+  <div class="hud-box" id="hud-right">
+    <div id="hud-wanted-label">WANTED</div>
+    <div id="hud-stars">☆☆☆☆☆</div>
+    <div id="hud-siren">🚨 POLICE ON YOU</div>
+  </div>
+  <div id="hud-objective"></div>
+  <div id="hud-arrow"></div>
+  <div id="hud-timer"></div>
+  <div id="hud-toast"></div>
+  <div id="hud-map-wrap"><canvas id="hud-minimap" width="180" height="180"></canvas></div>
+</div>
+
+<div class="screen" id="screen-title">
+  <div class="panel">
+    <h1>VELMORA</h1>
+    <h2>STREET DEBT</h2>
+    <p>Rook Marlowe owes the Harbormaster fifty grand. The drops are out there on the
+    streets of Port Velmora — collect the green cash bundles, stay on your feet, pay it down.</p>
+    <div class="controls">
+      <b>W A S D</b> move / drive &nbsp;·&nbsp; <b>Mouse</b> look &nbsp;·&nbsp; <b>Shift</b> sprint<br>
+      <b>E</b> steal / exit car &nbsp;·&nbsp; <b>F</b> punch &nbsp;·&nbsp; <b>G</b> fire &nbsp;·&nbsp; <b>M</b> mute<br>
+      <b>P</b> or <b>Esc</b> pause
+    </div>
+    <button id="btn-continue" class="hidden" type="button">Continue</button>
+    <div class="prompt">Click or press Space to play</div>
+  </div>
+</div>
+
+<div class="screen hidden" id="screen-busted">
+  <div class="panel">
+    <h1 class="small">BUSTED</h1>
+    <p id="busted-text">The Velmora PD got you. The debt is still out there — and so are the drops.</p>
+    <div class="prompt">Press Space to try again</div>
+  </div>
+</div>
+
+<div class="screen hidden" id="screen-pause">
+  <div class="panel">
+    <h1 class="small">PAUSED</h1>
+    <p>The streets of Port Velmora will wait for you.</p>
+    <div class="prompt">Press P to resume</div>
+  </div>
+</div>
+
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>
