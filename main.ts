@@ -1,7 +1,14 @@
 // VELMORA — Street Debt: the gta6-01 entry, an original open-world crime game
-// (Node 22, standard library only). The game lives in game/ beside this file:
-// plain static files a desktop browser loads offline — game/index.html and its
-// ES modules, three.js vendored under game/, no library fetched and no network
+// (Node 22, standard library only). Rook Marlowe owes the Harbormaster $50,000
+// and pays it down job by job in Port Velmora: collect the green cash drops,
+// steal cars, outrun the law — and at four stars a police helicopter circles
+// overhead with its searchlight on him. Six missions in all: the first drops,
+// a timed parcel, a getaway, a cross-town smuggling run, a chop-shop steal, and
+// one last haul under the heat. Between jobs he tunes three synthesized radio
+// stations (R), buys medkits, armor and shells at the shops (1-5), and switches
+// between the pistol and the shotgun (Q). The game lives in game/ beside this
+// file: plain static files a desktop browser loads offline — game/index.html and
+// its ES modules, three.js vendored under game/, no library fetched and no network
 // request at runtime. This program hands the entry in: it copies game/ and
 // screenshots/ from beside this file to /output and writes /output/dossier.json,
 // the summary the judge reads, built with the vendored make.fun library.
@@ -9,6 +16,9 @@
 // file (the first by name is the cover).
 //
 // Serve it locally with `node serve.ts`, then open http://localhost:8080.
+// Round 2 (Nov 2026): six missions, the police helicopter, the radio, the shops
+// and the shotgun — the entry resubmitted after round 1 was rejected on the
+// transcript-witness check, so the build is recorded fresh, end to end.
 // Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for /output:
 //   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
 

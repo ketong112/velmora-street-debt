@@ -6,19 +6,19 @@
         "seed": 1
     },
     {
-        "description": "Combat on foot: Rook with the pistol, two enforcers closing in, a foot cop chasing from the plaza side.",
+        "description": "Combat on foot: Rook firing the shotgun, two enforcers closing in, a foot cop chasing from the plaza side.",
         "name": "2-combat.jpg",
         "query": "?shot=combat&seed=1",
         "seed": 1
     },
     {
-        "description": "Chase: three stars of heat, police cars closing in on Rook's car mid-city.",
+        "description": "Chase: four stars of heat, the police helicopter circling overhead with its searchlight on Rook's car, police cars closing in mid-city.",
         "name": "3-chase.jpg",
         "query": "?shot=chase&seed=1",
         "seed": 1
     },
     {
-        "description": "Mission: the Midnight Parcel mid-delivery \u2014 Rook behind the wheel near the drop-off, 38 seconds on the clock, beacon over the drop-off.",
+        "description": "Mission: The Long Haul mid-delivery — Rook behind the wheel near the drop-off with the contraband in hand, 38 seconds on the clock, beacon over the drop-off.",
         "name": "4-mission.jpg",
         "query": "?shot=mission&seed=1",
         "seed": 1
