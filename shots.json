@@ -1,0 +1,26 @@
+[
+    {
+        "description": "Cover: Rook driving the starter car with three stars of heat, police cars closing in, the mission beacon over the plaza.",
+        "name": "1-cover.jpg",
+        "query": "?shot=cover&seed=1",
+        "seed": 1
+    },
+    {
+        "description": "Combat on foot: Rook with the pistol, two enforcers closing in, a foot cop chasing from the plaza side.",
+        "name": "2-combat.jpg",
+        "query": "?shot=combat&seed=1",
+        "seed": 1
+    },
+    {
+        "description": "Chase: three stars of heat, police cars closing in on Rook's car mid-city.",
+        "name": "3-chase.jpg",
+        "query": "?shot=chase&seed=1",
+        "seed": 1
+    },
+    {
+        "description": "Mission: the Midnight Parcel mid-delivery \u2014 Rook behind the wheel near the drop-off, 38 seconds on the clock, beacon over the drop-off.",
+        "name": "4-mission.jpg",
+        "query": "?shot=mission&seed=1",
+        "seed": 1
+    }
+]
