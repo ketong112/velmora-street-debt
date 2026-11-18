@@ -54,7 +54,7 @@ function makePoliceCar(x, z, heading, axis, dir, street, id) {
 }
 
 export function createPolice() {
-  return { footCops: [], cars: [], unseenTimer: 0, lightPhase: 0 };
+  return { footCops: [], cars: [], unseenTimer: 0, lightPhase: 0, heli: null };
 }
 
 // How many random street points to try before falling back to a point behind the player.
@@ -95,6 +95,50 @@ function nearestStreetLine(city, player) {
 export function addWanted(state, stars) {
   state.wanted = Math.min(WANTED.max, state.wanted + stars);
   state.police.unseenTimer = 0;
+}
+
+/**
+ * Hurt the player by `amount`, through body armor first: the armor eats what it
+ * can, the rest comes off health. Returns true when the hit killed him.
+ * Every damage source in the game goes through here, so armor works everywhere.
+ */
+export function damagePlayer(state, amount) {
+  const player = state.player;
+  let left = amount;
+  if (player.armor > 0) {
+    const eaten = Math.min(player.armor, left);
+    player.armor -= eaten;
+    left -= eaten;
+  }
+  if (left > 0) player.health = Math.max(0, player.health - left);
+  return player.health <= 0;
+}
+
+/** The helicopter: position, orbit angle, rotor spin, and its searchlight target. */
+function makeHeli(x, z) {
+  return { x, z, y: POLICE.heliHeight, angle: 0, rotor: 0 };
+}
+
+/**
+ * One fixed step for the helicopter: it circles over the player at orbit radius,
+ * closing in when far away, its rotor always spinning. It never touches the ground
+ * and never rams — its job is to watch, and its watch keeps the heat on.
+ */
+function stepHeli(state, dt) {
+  const heli = state.police.heli;
+  if (!heli) return;
+  const player = state.player;
+  heli.angle += dt * 0.45;
+  const tx = player.x + Math.cos(heli.angle) * POLICE.heliOrbit;
+  const tz = player.z + Math.sin(heli.angle) * POLICE.heliOrbit;
+  const dx = tx - heli.x;
+  const dz = tz - heli.z;
+  const dist = Math.hypot(dx, dz) || 1;
+  const speed = Math.min(POLICE.heliSpeed, dist * 2);
+  heli.x += (dx / dist) * speed * dt;
+  heli.z += (dz / dist) * speed * dt;
+  heli.y = POLICE.heliHeight + Math.sin(state.elapsed * 0.8) * 1.2;
+  heli.rotor += dt * 22;
 }
 
 /** The nearest intersection crossing ahead on this car's road, or null. */
@@ -236,24 +280,17 @@ function stepPoliceCar(car, state, dt, player, playerCar) {
     const cdz = playerCar.z - car.z;
     if (cdx * cdx + cdz * cdz < RAM_RANGE * RAM_RANGE && car.ramCooldown <= 0) {
       car.ramCooldown = POLICE.carRamCooldown;
-      player.health -= POLICE.carRamDamage;
+      const killed = damagePlayer(state, POLICE.carRamDamage);
       playerCar.speed *= 0.55;
       car.speed *= 0.6;
-      if (player.health <= 0) {
-        player.health = 0;
-        return 1;
-      }
+      if (killed) return 1;
     }
   } else if (dist < FOOT_HIT_RANGE && Math.abs(car.speed) > 3) {
-    player.health -= POLICE.carHitDamage;
     // Knock the player away from the car so the next hit is not the same frame.
     player.x += (dx / dist) * 3;
     player.z += (dz / dist) * 3;
     car.speed *= 0.5;
-    if (player.health <= 0) {
-      player.health = 0;
-      return 1;
-    }
+    if (damagePlayer(state, POLICE.carHitDamage)) return 1;
   }
   return 0;
 }
@@ -270,6 +307,7 @@ export function stepPolice(state, dt, random) {
   if (state.wanted <= 0) {
     police.footCops.length = 0;
     police.cars.length = 0;
+    police.heli = null;
     police.unseenTimer = 0;
     return 0;
   }
@@ -303,9 +341,24 @@ export function stepPolice(state, dt, random) {
     police.cars.push(car);
   }
 
+  // The helicopter: up at 4+ stars, gone when the heat drops below four. It
+  // arrives over the player, so the first thing Rook sees is the searchlight.
+  if (state.wanted >= 4 && !police.heli) {
+    police.heli = makeHeli(player.x + POLICE.heliOrbit, player.z);
+  } else if (state.wanted < 4) {
+    police.heli = null;
+  }
+
   // Seen? Any police still up within sight range keeps the heat on; unseen, the timer runs.
   // A cop on the ground cannot report anything.
   let seen = false;
+  // The helicopter watches from the sky: within sight range horizontally, its
+  // searchlight is on Rook and the heat never decays — four stars is a manhunt.
+  if (police.heli) {
+    const hdx = police.heli.x - player.x;
+    const hdz = police.heli.z - player.z;
+    if (hdx * hdx + hdz * hdz < POLICE.sightRange * POLICE.sightRange) seen = true;
+  }
   for (const cop of police.footCops) {
     if (cop.state === 'down') continue;
     const dx = cop.x - player.x;
@@ -377,5 +430,6 @@ export function stepPolice(state, dt, random) {
   for (const car of police.cars) {
     if (stepPoliceCar(car, state, dt, player, playerCar)) return 1;
   }
+  stepHeli(state, dt);
   return 0;
 }

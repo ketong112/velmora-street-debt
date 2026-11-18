@@ -3,8 +3,9 @@
 // value is written to the page only when it actually changes. The minimap is the one thing
 // redrawn every frame: a 180x180 canvas is cheap, and Rook never stops moving.
 
-import { CITY, COMBAT, PLAYER, STORY } from './config.js';
+import { CITY, COMBAT, PLAYER, RADIO, SHOP_ITEMS, STORY } from './config.js';
 import { currentMission, redZonesActive } from './missions.js';
+import { nearestShop } from './shops.js';
 
 const MAP_SIZE = 180;
 
@@ -25,6 +26,8 @@ export function createHud() {
   const objectiveEl = document.getElementById('hud-objective');
   const arrowEl = document.getElementById('hud-arrow');
   const ammoEl = document.getElementById('hud-ammo');
+  const radioEl = document.getElementById('hud-radio');
+  const shopEl = document.getElementById('hud-shop');
   const timerEl = document.getElementById('hud-timer');
   const map = document.getElementById('hud-minimap');
   const toastEl = document.getElementById('hud-toast');
@@ -32,10 +35,13 @@ export function createHud() {
 
   let lastCash = -1;
   let lastHealth = -1;
+  let lastArmor = -1;
   let lastWanted = -1;
   let lastSpeed = -1;
   let lastObjective = '';
   let lastAmmo = '';
+  let lastRadio = '';
+  let lastShop = '';
   let lastTimer = '';
   let toastTimer = 0;
 
@@ -108,6 +114,21 @@ export function createHud() {
       ctx.arc(x, z, POLICE_DOT, 0, Math.PI * 2);
       ctx.fill();
     }
+    // The helicopter as a yellow ring: it is the one dot that can see everything.
+    if (state.police.heli) {
+      const [x, z] = toMap(state.police.heli.x, state.police.heli.z);
+      ctx.strokeStyle = '#ffd166';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(x, z, POLICE_DOT + 2, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    // Shops as orange squares, so Rook can find the shelf from across town.
+    ctx.fillStyle = '#ff9e2c';
+    for (const shop of state.shops) {
+      const [x, z] = toMap(shop.x, shop.z);
+      ctx.fillRect(x - 2.5, z - 2.5, 5, 5);
+    }
     // The mission objective as a gold diamond.
     if (state.objective) {
       const [x, z] = toMap(state.objective.x, state.objective.z);
@@ -177,11 +198,15 @@ export function createHud() {
       debtEl.textContent = `Debt ${money(STORY.debt - state.cash)} left`;
     }
     const health = Math.round(state.player.health);
-    if (health !== lastHealth) {
+    const armor = Math.round(state.player.armor);
+    if (health !== lastHealth || armor !== lastArmor) {
       lastHealth = health;
+      lastArmor = armor;
       healthFill.style.width = `${(health / PLAYER.maxHealth) * 100}%`;
       healthFill.style.background = health < 30 ? '#e5534b' : '#4ade80';
-      healthText.textContent = `${health}`;
+      // Armor rides on the health line: "100 +50" reads at a glance, and the
+      // shield only shows while there is armor left to show.
+      healthText.textContent = armor > 0 ? `${health} +${armor}🛡` : `${health}`;
     }
     if (state.wanted !== lastWanted) {
       lastWanted = state.wanted;
@@ -195,15 +220,42 @@ export function createHud() {
       lastSpeed = speed;
       speedEl.textContent = state.inCar ? `${speed} km/h` : '';
     }
-    // The pistol: rounds left, or nothing when Rook has no piece.
-    const ammo = state.combat.hasPistol ? `🔫 ${state.combat.ammo} / ${COMBAT.pistolAmmo}` : '';
+    // The guns: the one in hand, its rounds, and Q to switch when both are owned.
+    let ammo = '';
+    if (state.combat.hasPistol || state.combat.hasShotgun) {
+      const both = state.combat.hasPistol && state.combat.hasShotgun;
+      if (state.combat.weapon === 'shotgun' && state.combat.hasShotgun) {
+        ammo = `💥 Shotgun ${state.combat.shells} shells${both ? ' (Q)' : ''}`;
+      } else {
+        ammo = `🔫 Pistol ${state.combat.ammo} / ${COMBAT.pistolAmmo}${both ? ' (Q)' : ''}`;
+      }
+    }
     if (ammo !== lastAmmo) {
       lastAmmo = ammo;
       ammoEl.textContent = ammo;
     }
-    // The delivery timer: counts down while the parcel is in hand, red under 10 seconds.
+    // The radio: the station R cycles to, or nothing before the loop starts.
+    const radio = `📻 ${RADIO[state.radioStation]?.name ?? RADIO[0].name}`;
+    if (radio !== lastRadio) {
+      lastRadio = radio;
+      radioEl.textContent = radio;
+    }
+    // The shop shelf, while Rook stands at a shop on foot: the whole menu in one
+    // line, so the digit to press is right there — 1 medkit, 2 armor, 3 ammo,
+    // 4 shotgun, 5 shells. Away from a shop the line is gone.
+    const shop = !state.inCar ? nearestShop(state.shops, state.player.x, state.player.z) : null;
+    const shopLine = shop
+      ? `🏪 ${shop.name} — ${SHOP_ITEMS.map((item) => `[${item.key}] ${item.label} $${item.price}`).join(' · ')}`
+      : '';
+    if (shopLine !== lastShop) {
+      lastShop = shopLine;
+      shopEl.textContent = shopLine;
+      shopEl.classList.toggle('show', shopLine !== '');
+    }
+    // The delivery timer: counts down while a parcel — or the contraband — is in
+    // hand, red under 10 seconds.
     const mission = currentMission(state.missions);
-    const timer = mission && mission.kind === 'delivery' && mission.phase === 'deliver'
+    const timer = mission && (mission.kind === 'delivery' || mission.kind === 'smuggle') && mission.phase === 'deliver'
       ? `⏱ ${Math.max(0, Math.ceil(mission.timeLeft))}s`
       : '';
     if (timer !== lastTimer) {
@@ -212,7 +264,7 @@ export function createHud() {
       timerEl.classList.toggle('show', timer !== '');
       timerEl.classList.toggle(
         'urgent',
-        mission !== null && mission.kind === 'delivery' && mission.phase === 'deliver' && mission.timeLeft < 10,
+        mission !== null && (mission.kind === 'delivery' || mission.kind === 'smuggle') && mission.phase === 'deliver' && mission.timeLeft < 10,
       );
     }
     // The objective line and its compass arrow: the arrow turns with the camera.

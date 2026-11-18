@@ -7,7 +7,7 @@
 
 import { STEP } from './config.js';
 import { createRandom } from './random.js';
-import { spawnEnforcers } from './combat.js';
+import { spawnEnforcers, tryFire } from './combat.js';
 import { missionObjective } from './missions.js';
 import { SCREEN_PLAY, SCREEN_TITLE } from './render.js';
 
@@ -186,12 +186,16 @@ export function stageShot(name, world) {
   }
 
   if (name === 'combat') {
-    // Combat on foot: Rook has the pistol, two enforcers close in, a foot cop
+    // Combat on foot: Rook has the shotgun, two enforcers close in, a foot cop
     // chases from the plaza side. A fixed camera behind Rook, looking at the
-    // nearest enforcer, so the fight reads at a glance.
+    // nearest enforcer, so the fight reads at a glance. The shotgun fires once
+    // as the frame is staged, so the muzzle flash is live in the shot.
     const s = world.state;
     s.combat.hasPistol = true;
     s.combat.ammo = 12;
+    s.combat.hasShotgun = true;
+    s.combat.shells = 6;
+    s.combat.weapon = 'shotgun';
     const random = createRandom(20261118);
     spawnEnforcers(s.combat, s.city, s.player, 2, random);
     // Compose the fight: the enforcers close, the cop closing from the plaza side.
@@ -204,6 +208,14 @@ export function stageShot(name, world) {
     for (let index = 0; index < 30; index += 1) {
       world.step(STEP, 0, 0, Math.PI, false, false);
     }
+    // One shotgun blast toward the nearest enforcer, staged by hand (no step
+    // after it, so the muzzle flash is still lit when the frame is painted).
+    // The aim is computed from the enforcer's actual position after the 30
+    // steps — it closed in while the fight was staged, so the round-1 bearing
+    // no longer points at it.
+    const e0 = s.combat.enforcers[0];
+    const aimYaw = Math.atan2(-(e0.x - s.player.x), -(e0.z - s.player.z));
+    tryFire(s.combat, s, aimYaw);
     const p = s.player;
     const e = s.combat.enforcers[0];
     const fx = Math.sin(p.heading);
@@ -239,30 +251,52 @@ export function stageShot(name, world) {
         view: { mode: 'follow', yaw, pitch: 0.3 },
       };
     }
-    // Chase: three stars of heat, then let the police cars close in while the player
-    // coasts — slow enough that the faster police cars catch up and ram, mid-city.
-    world.state.wanted = 3;
+    // Chase: four stars of heat, so the police helicopter is up, then let the
+    // police cars close in while the player coasts — slow enough that the faster
+    // police cars catch up and ram, mid-city.
+    world.state.wanted = 4;
     for (let index = 0; index < CHASE_SECONDS / STEP; index += 1) {
       world.step(STEP, 0, 0, camYaw, false, false);
     }
     const p = world.state.currentCar ?? world.state.player;
+    const heli = world.state.police.heli;
+    if (!heli) {
+      // No helicopter (a staging edge case): fall back to the plain chase frame.
+      return {
+        screen: SCREEN_PLAY,
+        best: world.state.cash,
+        view: chaseCamera(p),
+      };
+    }
+    // The camera sits ahead and to the side, low, looking up at the midpoint
+    // between the car and the helicopter: the car low in the frame, the heli
+    // and its searchlight cone above it, the police cars closing behind.
+    const fx = Math.sin(p.heading);
+    const fz = Math.cos(p.heading);
+    const rx = Math.cos(p.heading);
+    const rz = -Math.sin(p.heading);
     return {
       screen: SCREEN_PLAY,
       best: world.state.cash,
-      view: chaseCamera(p),
+      view: {
+        mode: 'fixed',
+        pos: [p.x + fx * 20 + rx * 13, 5, p.z + fz * 20 + rz * 13],
+        target: [(p.x + heli.x) / 2, 12, (p.z + heli.z) / 2],
+      },
     };
   }
 
   if (name === 'mission') {
-    // The Midnight Parcel mid-delivery: Rook is behind the wheel of the starter
-    // car, 14 metres from the drop-off, the parcel in hand, 38 seconds on the
-    // clock, the beacon over the drop-off and the timer on the HUD.
-    world.state.missions.index = 1;
+    // The Long Haul mid-delivery: Rook is behind the wheel of the starter car,
+    // 14 metres from the drop-off, the contraband in hand, 38 seconds on the
+    // clock, the beacon over the drop-off and the timer on the HUD. The cash
+    // shows the three jobs already done ($1,500 + $2,500 + $5,000).
+    world.state.missions.index = 3;
     for (let index = 0; index < 5; index += 1) {
       world.step(STEP, 0, 0, Math.PI, false, false);
     }
     const s = world.state;
-    const mission = s.missions.list[1];
+    const mission = s.missions.list[3];
     const car = s.cars[s.cars.length - 1]; // the starter car
     const drop = mission.dropoff;
     const dx = drop.x - s.player.x;
@@ -277,7 +311,7 @@ export function stageShot(name, world) {
     s.player.x = car.x;
     s.player.z = car.z;
     s.player.heading = car.heading;
-    s.cash = 1500;
+    s.cash = 9000;
     mission.phase = 'deliver';
     mission.timeLeft = 38;
     s.combat.hasPackage = true;
@@ -286,17 +320,88 @@ export function stageShot(name, world) {
     s.objective = missionObjective(s.missions, s);
     const fx = Math.sin(car.heading);
     const fz = Math.cos(car.heading);
-    // Straight behind the car, up high, looking at the drop-off: the road is
-    // clear behind the car (no tower in the way), the car sits low in frame
-    // and the beacon over the drop-off is the centre of the shot.
-    return {
-      screen: SCREEN_PLAY,
-      best: s.cash,
-      view: {
+    // The camera: straight behind the car, up high, looking at the drop-off —
+    // but the direct line back can run past a tower wall (the first round-2 shot
+    // proved it: half the frame was a building 8 m from the camera). So try
+    // positions on an arc behind the car and take the one FARTHEST from any
+    // building that still has a clear sightline to both the car and the beacon
+    // over the drop-off — distance from walls, not just outside them, is what
+    // keeps a wall out of the frame.
+    const buildingAt = (x, z, margin) => {
+      for (const b of s.city.buildings) {
+        if (Math.abs(x - b.x) < b.w / 2 + margin && Math.abs(z - b.z) < b.d / 2 + margin) return b;
+      }
+      return null;
+    };
+    const clearance = (x, z) => {
+      let best = Infinity;
+      for (const b of s.city.buildings) {
+        const nx = Math.max(b.x - b.w / 2, Math.min(x, b.x + b.w / 2));
+        const nz = Math.max(b.z - b.d / 2, Math.min(z, b.z + b.d / 2));
+        best = Math.min(best, Math.hypot(x - nx, z - nz));
+      }
+      return best;
+    };
+    const sightlineClear = (from, to) => {
+      const dist = Math.hypot(to[0] - from[0], to[2] - from[2]);
+      const steps = Math.max(1, Math.ceil(dist / 2));
+      for (let i = 1; i < steps; i += 1) {
+        const t = i / steps;
+        const x = from[0] + (to[0] - from[0]) * t;
+        const z = from[2] + (to[2] - from[2]) * t;
+        const y = from[1] + (to[1] - from[1]) * t;
+        const b = buildingAt(x, z, 2);
+        if (b && y < b.h) return false;
+      }
+      return true;
+    };
+    const rx = Math.cos(car.heading);
+    const rz = -Math.sin(car.heading);
+    // Two passes: first the original behind-car framing (back 16, height 10),
+    // when some angle near it stands at least 10 m clear of every wall; only
+    // when no angle near the car is that clear, the farthest-from-walls angle.
+    // Clearance alone picks a high, distant camera and loses the framing.
+    let view = null;
+    let bestFraming = Infinity;
+    let bestClearance = -1;
+    let fallback = null;
+    for (const back of [16, 12, 20, 10, 24]) {
+      for (const side of [0, 7, -7, 14, -14]) {
+        for (const height of [10, 14, 7]) {
+          const pos = [car.x - fx * back + rx * side, height, car.z - fz * back + rz * side];
+          const at = buildingAt(pos[0], pos[2], 0.5);
+          if (at && height < at.h) continue;
+          if (!sightlineClear(pos, [car.x, 1.5, car.z])) continue;
+          if (!sightlineClear(pos, [drop.x, 2, drop.z])) continue;
+          const clear = clearance(pos[0], pos[2]);
+          if (clear > bestClearance) {
+            bestClearance = clear;
+            fallback = { mode: 'fixed', pos, target: [drop.x, 2, drop.z] };
+          }
+          if (clear >= 10) {
+            const framing = Math.abs(back - 16) + Math.abs(side) + Math.abs(height - 10) * 0.5;
+            if (framing < bestFraming) {
+              bestFraming = framing;
+              view = { mode: 'fixed', pos, target: [drop.x, 2, drop.z] };
+            }
+          }
+        }
+      }
+    }
+    if (!view) view = fallback;
+    // No clear angle found (should not happen on this seed): the old straight
+    // behind-car frame, rather than no frame at all.
+    if (!view) {
+      view = {
         mode: 'fixed',
         pos: [car.x - fx * 16, 10, car.z - fz * 16],
         target: [drop.x, 2, drop.z],
-      },
+      };
+    }
+    return {
+      screen: SCREEN_PLAY,
+      best: s.cash,
+      view,
     };
   }
 

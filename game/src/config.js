@@ -72,6 +72,13 @@ export const POLICE = {
   maxCars: 3,
   sightRange: 60,
   decayDelay: 12,
+  // The helicopter: circles over Rook at 4+ stars, its searchlight on him. It
+  // spots him like a cop on the ground, so the heat does not decay while it is
+  // overhead — four stars is a manhunt, not a misunderstanding.
+  heliSpeed: 16,
+  heliHeight: 30,
+  heliOrbit: 20,
+  heliSpotRadius: 6,
 };
 
 /** Wanted: 0-5 stars; crimes add heat, hiding sheds it one star at a time. */
@@ -116,6 +123,8 @@ export const PLAYER = {
   friction: 11,
   turnRate: 12,
   maxHealth: 100,
+  // Body armor from the shop: damage eats armor first, then health. Caps at 100.
+  armorMax: 100,
 };
 
 /** Cash drops: how many are live, how far away one is collected, respawn delay. */
@@ -189,6 +198,74 @@ export const COMBAT = {
   pistolAmmo: 12,
   pistolAt: { x: 14, z: 14 },
   pistolRadius: 1.7,
+  // The shotgun: a spread gun bought at Iron & Ammo. Five pellets in a wide cone,
+  // each pellet a hit of its own — up close it drops a cop in one pull, at range it
+  // is a loud way to miss. Slow to pump, and the shells only come from the shop.
+  shotgunRange: 18,
+  shotgunArc: 0.32, // wide cone, a half-angle in radians: every hostile inside it takes pellets
+  shotgunCooldown: 0.9,
+  shotgunPelletDamage: 2,
+  shotgunShellsPerBuy: 6,
+};
+
+/** Radio: three synthesized stations, no audio files — chords, wave and pace each. */
+export const RADIO = [
+  {
+    name: 'VELMORA FM',
+    chords: [[110.0, 130.81, 164.81], [87.31, 110.0, 130.81], [130.81, 164.81, 196.0], [98.0, 123.47, 146.83]],
+    seconds: 2.4,
+    wave: 'triangle',
+    vol: 0.05,
+  },
+  {
+    name: 'NIGHT DRIVE',
+    chords: [[146.83, 174.61, 220.0], [116.54, 146.83, 174.61], [130.81, 164.81, 196.0], [98.0, 146.83, 196.0]],
+    seconds: 1.8,
+    wave: 'square',
+    vol: 0.025,
+  },
+  {
+    name: 'HARBOUR JAZZ',
+    chords: [[130.81, 164.81, 196.0, 246.94], [110.0, 130.81, 164.81, 196.0], [146.83, 174.61, 220.0, 261.63], [98.0, 123.47, 146.83, 174.61]],
+    seconds: 3.4,
+    wave: 'sine',
+    vol: 0.06,
+  },
+];
+
+/** Shops: three storefronts on street corners, each selling the same shelf. */
+export const SHOPS = [
+  { id: 'meds', name: "DOC'S MEDS", x: 25, z: 25, awning: '#37d67a' },
+  { id: 'ammo', name: 'IRON & AMMO', x: -75, z: 25, awning: '#e5534b' },
+  { id: 'general', name: 'HARBOR GENERAL', x: 25, z: -75, awning: '#f2c94c' },
+];
+
+/** What a shop sells: price in collected cash, and what it does. */
+export const SHOP_ITEMS = [
+  { key: '1', id: 'health', label: 'Medkit — full health', price: 150 },
+  { key: '2', id: 'armor', label: 'Body armor +50', price: 300 },
+  { key: '3', id: 'ammo', label: 'Pistol ammo +12', price: 100 },
+  { key: '4', id: 'shotgun', label: 'Shotgun (6 shells)', price: 800 },
+  { key: '5', id: 'shells', label: 'Shotgun shells +6', price: 120 },
+];
+
+/** Mission 4, the smuggling run: pay on completion, and the timer's pace. */
+export const MISSION4 = {
+  payout: 6000,
+  timePerMetre: 1 / 12,
+  timeBase: 20,
+};
+
+/** Mission 5, the chop shop: pay on completion, and the radius of the drop-off. */
+export const MISSION5 = {
+  payout: 7000,
+  hideoutRadius: 5,
+};
+
+/** Mission 6, the last haul: pay on completion, and how many drops it takes. */
+export const MISSION6 = {
+  payout: 8000,
+  drops: 8,
 };
 
 /** Enforcers: the Harbormaster's collectors, sent after Rook during the getaway. */

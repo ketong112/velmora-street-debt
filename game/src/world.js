@@ -20,7 +20,9 @@ import {
   stepEnforcers,
   tryFire,
   tryPunch,
+  trySwitchWeapon,
 } from './combat.js';
+import { buyItem, createShops, nearestShop } from './shops.js';
 
 export const EVENT_COIN = 1;
 export const EVENT_HIT = 2;
@@ -44,6 +46,9 @@ export const EVENT_MISSION_FAIL = 262144;
 export const EVENT_MISSION_PACKAGE = 524288;
 export const EVENT_MISSION_EVADE = 1048576;
 export const EVENT_MISSION_HIDEOUT = 2097152;
+export const EVENT_MISSION_STEAL = 4194304;
+export const EVENT_SHOP = 8388608;
+export const EVENT_WEAPON = 16777216;
 
 const TWO_PI = Math.PI * 2;
 
@@ -72,6 +77,7 @@ export function createWorld(random) {
     vx: 0,
     vz: 0,
     health: PLAYER.maxHealth,
+    armor: 0, // body armor from the shop: damage eats this before health
     moving: false,
     walkPhase: 0,
   };
@@ -93,6 +99,11 @@ export function createWorld(random) {
     police: createPolice(),
     missions: createMissions(),
     combat: createCombat(),
+    shops: createShops(),
+    radioStation: 0, // the radio station, 0..RADIO.length-1; R cycles it (main.js)
+    shopNotice: '', // the last shop result line, for the toast main.js shows
+    weaponNotice: '', // the last weapon-switch line, for the toast main.js shows
+    lastShotWeapon: 'pistol', // the gun the last shot came from, for the sound
     currentCar: null,
     inCar: false,
     busted: false,
@@ -133,6 +144,7 @@ export function createWorld(random) {
     player.vx = 0;
     player.vz = 0;
     player.health = PLAYER.maxHealth;
+    player.armor = 0;
     player.moving = false;
     player.walkPhase = 0;
     state.cash = 0;
@@ -152,6 +164,9 @@ export function createWorld(random) {
     state.police = createPolice();
     state.missions = createMissions();
     state.combat = createCombat();
+    state.shopNotice = '';
+    state.weaponNotice = '';
+    state.lastShotWeapon = 'pistol';
     state.currentCar = null;
     state.inCar = false;
     state.busted = false;
@@ -283,6 +298,29 @@ export function createWorld(random) {
       const shot = tryFire(state.combat, state, camYaw);
       if (shot.fired) events |= shot.hit ? EVENT_SHOT_HIT : EVENT_SHOT;
       else if (shot.empty) events |= EVENT_SHOT_EMPTY;
+      // main.js reads the weapon off the shot to pick the sound: keep the last
+      // one fired on the state, so the toast and the sound agree.
+      state.lastShotWeapon = shot.fired || shot.empty ? shot.weapon : state.lastShotWeapon;
+    }
+    // Q to switch guns, 1-5 to buy at a shop — on foot only, and only when asked.
+    if (opts && opts.weapon) {
+      const switched = trySwitchWeapon(state.combat, state);
+      if (switched) {
+        state.weaponNotice = switched === 'shotgun'
+          ? 'Shotgun out — spread shot, slow pump, shells from Iron & Ammo.'
+          : 'Pistol out.';
+        events |= EVENT_WEAPON;
+      }
+    }
+    if (opts && opts.buy) {
+      if (!state.inCar) {
+        const shop = nearestShop(state.shops, player.x, player.z);
+        if (shop) {
+          const result = buyItem(state, shop, String(opts.buy));
+          state.shopNotice = result.text;
+          events |= EVENT_SHOP;
+        }
+      }
     }
     stepCombat(state.combat, dt);
     if (stepEnforcers(state.combat, state, dt)) {
@@ -360,6 +398,7 @@ export function createWorld(random) {
     else if (missionEvent === 'package') events |= EVENT_MISSION_PACKAGE;
     else if (missionEvent === 'evade') events |= EVENT_MISSION_EVADE;
     else if (missionEvent === 'hideout') events |= EVENT_MISSION_HIDEOUT;
+    else if (missionEvent === 'steal') events |= EVENT_MISSION_STEAL;
     state.objective = missionObjective(state.missions, state);
 
     // Speeding on a delivery draws the law — over the limit anywhere, twice as

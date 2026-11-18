@@ -1,10 +1,12 @@
-// Missions: three jobs that pay Rook's $50,000 debt down, one at a time, in the
+// Missions: six jobs that pay Rook's $50,000 debt down, one at a time, in the
 // threejs-gameplay-systems skill's shape — a design brief per job, a core-loop
 // contract (do the verb, under pressure, for a reward, with a cost for failing),
 // and an objective the HUD can always point at. A mission is one job with a kind,
 // a phase, and the places it needs; the world watches the player's cash, position
 // and wanted level and flips the phase. The story arc: the Harbormaster's debt,
-// paid down job by job — drops first, then a parcel, then a getaway.
+// paid down job by job — drops first, then a parcel, then a getaway, a smuggling
+// run, a chop-shop steal, and one last haul under the heat. Debt arc: $50,000
+// → $41,000 after the first three jobs, → $20,000 when all six are done.
 //
 // Mission 1, "The First Drop": collect MISSION.firstTarget of drops, then return
 // to the plaza. While collecting, the objective is the nearest live drop; once the
@@ -20,8 +22,9 @@
 // the three stars that follow, then reach the hideout. The enforcers spawn when
 // the heat does, and give up when it is gone.
 
-import { COMBAT, ENFORCER, MISSION, MISSION2, MISSION3, RED_ZONES, WANTED } from './config.js';
+import { COMBAT, ENFORCER, MISSION, MISSION2, MISSION3, MISSION4, MISSION5, MISSION6, RED_ZONES, WANTED } from './config.js';
 import { spawnEnforcers } from './combat.js';
+import { addWanted } from './police.js';
 
 /**
  * The nearest parked car to (x, z) at any distance. cars.js's nearestParkedCar
@@ -92,6 +95,43 @@ export function createMissions() {
         // The intro's "three stars" is WANTED.evadeStars, set when the coupe is
         // stolen — if the number changes there, the words must change here too.
         intro: 'Time to get loud. Steal the gold coupe, lose the three stars that follow, reach the hideout.',
+      },
+      {
+        id: 'the-long-haul',
+        label: 'The Long Haul',
+        kind: 'smuggle',
+        detail: 'Pick up the contraband at the docks, run it across town before the timer ends',
+        payout: MISSION4.payout,
+        phase: MISSION_PHASE_PICKUP,
+        started: false,
+        pickup: null,
+        dropoff: null,
+        timer: 0,
+        timeLeft: 0,
+        intro: 'Contraband at the far docks, a buyer at the far end of town. Grab it fast — the docks are watched, so expect a star the moment you touch it.',
+      },
+      {
+        id: 'the-chop-shop',
+        label: 'The Chop Shop',
+        kind: 'stealdeliver',
+        detail: 'Steal the violet coupe, deliver it to the chop shop',
+        payout: MISSION5.payout,
+        phase: MISSION_PHASE_STEAL,
+        started: false,
+        targetCar: null,
+        hideout: null,
+        intro: 'A buyer wants the violet coupe whole. Steal it, drive it to the chop shop across town — dented is fine, missing is not.',
+      },
+      {
+        id: 'the-last-haul',
+        label: 'The Last Haul',
+        kind: 'finale',
+        detail: 'Collect 8 drops under two stars of heat, then return to the plaza',
+        payout: MISSION6.payout,
+        phase: MISSION_PHASE_COLLECT,
+        started: false,
+        dropsAtStart: 0,
+        intro: 'The Harbormaster is done waiting. Eight drops, two stars of heat on you from the first step, and then back to the plaza — finish this.',
       },
     ],
     index: 0,
@@ -170,6 +210,31 @@ function initMission(mission, state) {
     mission.targetCar = car;
     const hideout = farthestSpawnPoint(state, state.player.x, state.player.z);
     mission.hideout = { x: hideout.x, z: hideout.z };
+  } else if (mission.kind === 'smuggle') {
+    // The contraband run: same cross-town shape as the parcel, a faster clock,
+    // and the docks are watched — the pickup itself draws a star.
+    const pickup = farthestSpawnPoint(state, state.player.x, state.player.z);
+    const dropoff = farthestSpawnPointExcept(state, pickup.x, pickup.z, pickup);
+    mission.pickup = { x: pickup.x, z: pickup.z };
+    mission.dropoff = { x: dropoff.x, z: dropoff.z };
+    const dist = Math.hypot(dropoff.x - pickup.x, dropoff.z - pickup.z);
+    mission.timer = Math.round(dist * MISSION4.timePerMetre + MISSION4.timeBase);
+    mission.timeLeft = mission.timer;
+  } else if (mission.kind === 'stealdeliver') {
+    // The violet coupe: the nearest parked car, repainted so it reads at a glance,
+    // and the chop shop at the far end of town from Rook.
+    const car = nearestParkedCarAny(state.cars, state.player.x, state.player.z) ?? state.cars[0];
+    if (!car) return;
+    car.color = 4; // violet — the buyer's coupe, not to be confused with the gold one
+    mission.targetCar = car;
+    const hideout = farthestSpawnPoint(state, state.player.x, state.player.z);
+    mission.hideout = { x: hideout.x, z: hideout.z };
+  } else if (mission.kind === 'finale') {
+    // The last haul starts hot: two stars on Rook from the first step, and the
+    // count starts from the drops he has already banked.
+    mission.dropsAtStart = state.dropsCollected;
+    state.wanted = Math.max(state.wanted, 2);
+    state.police.unseenTimer = 0;
   }
 }
 
@@ -181,10 +246,11 @@ function near(x1, z1, x2, z2, radius) {
 
 /**
  * Advance the current mission from the world state. Returns the transition that
- * happened this step, or null: 'start' when a job opens, 'return' when the first
- * target is hit, 'package' when the parcel is picked up, 'fail' when the delivery
- * timer runs out, 'evade' when the gold coupe is stolen, 'hideout' when the heat
- * is lost, 'done' when a job completes.
+ * happened this step, or null: 'start' when a job opens, 'return' when a collect
+ * target is hit, 'package' when a parcel or the contraband is picked up, 'fail'
+ * when a delivery timer runs out, 'evade' when the gold coupe is stolen,
+ * 'hideout' when the heat is lost, 'steal' when the violet coupe is stolen,
+ * 'done' when a job completes.
  */
 export function stepMission(missions, state, dt, random) {
   const mission = currentMission(missions);
@@ -272,6 +338,81 @@ export function stepMission(missions, state, dt, random) {
     }
     return null;
   }
+
+  if (mission.kind === 'smuggle') {
+    // The Long Haul: the parcel's shape, a faster clock, and the pickup itself
+    // draws a star — the docks are watched. Late means back to the pickup.
+    if (mission.phase === MISSION_PHASE_PICKUP) {
+      if (near(state.player.x, state.player.z, mission.pickup.x, mission.pickup.z, MISSION2.pickupRadius)) {
+        mission.phase = MISSION_PHASE_DELIVER;
+        mission.timeLeft = mission.timer;
+        state.combat.hasPackage = true;
+        addWanted(state, 1);
+        return 'package';
+      }
+      return null;
+    }
+    if (mission.phase === MISSION_PHASE_DELIVER) {
+      mission.timeLeft -= dt;
+      if (mission.timeLeft <= 0) {
+        mission.phase = MISSION_PHASE_PICKUP;
+        mission.timeLeft = mission.timer;
+        state.combat.hasPackage = false;
+        return 'fail';
+      }
+      if (near(state.player.x, state.player.z, mission.dropoff.x, mission.dropoff.z, MISSION2.deliverRadius)) {
+        mission.phase = MISSION_PHASE_DONE;
+        state.cash += MISSION4.payout;
+        state.combat.hasPackage = false;
+        missions.index += 1;
+        return 'done';
+      }
+    }
+    return null;
+  }
+
+  if (mission.kind === 'stealdeliver') {
+    // The Chop Shop: steal the violet coupe, then drive it to the chop shop.
+    // No evade phase — the job is the car, not the heat — but the theft itself
+    // is still a crime, so the steal still puts a star on Rook.
+    if (mission.phase === MISSION_PHASE_STEAL) {
+      if (state.inCar && state.currentCar === mission.targetCar) {
+        mission.phase = MISSION_PHASE_DELIVER;
+        return 'steal';
+      }
+      return null;
+    }
+    if (mission.phase === MISSION_PHASE_DELIVER) {
+      if (near(state.player.x, state.player.z, mission.hideout.x, mission.hideout.z, MISSION5.hideoutRadius)) {
+        mission.phase = MISSION_PHASE_DONE;
+        state.cash += MISSION5.payout;
+        missions.index += 1;
+        return 'done';
+      }
+    }
+    return null;
+  }
+
+  if (mission.kind === 'finale') {
+    // The Last Haul: collect MISSION6.drops drops under the two stars the job
+    // opened with, then back to the plaza for the final payout.
+    if (mission.phase === MISSION_PHASE_COLLECT) {
+      if (state.dropsCollected - mission.dropsAtStart >= MISSION6.drops) {
+        mission.phase = MISSION_PHASE_RETURN;
+        return 'return';
+      }
+      return null;
+    }
+    if (mission.phase === MISSION_PHASE_RETURN) {
+      if (near(state.player.x, state.player.z, state.city.plaza.x, state.city.plaza.z, MISSION.returnRadius)) {
+        mission.phase = MISSION_PHASE_DONE;
+        state.cash += MISSION6.payout;
+        missions.index += 1;
+        return 'done';
+      }
+    }
+    return null;
+  }
   return null;
 }
 
@@ -337,6 +478,55 @@ export function missionObjective(missions, state) {
     }
     if (mission.phase === MISSION_PHASE_HIDEOUT) {
       return { x: mission.hideout.x, z: mission.hideout.z, label: 'Reach the hideout' };
+    }
+    return null;
+  }
+  if (mission.kind === 'smuggle') {
+    if (mission.phase === MISSION_PHASE_PICKUP) {
+      return { x: mission.pickup.x, z: mission.pickup.z, label: 'Pick up the contraband' };
+    }
+    if (mission.phase === MISSION_PHASE_DELIVER) {
+      return {
+        x: mission.dropoff.x,
+        z: mission.dropoff.z,
+        label: `Deliver the contraband — ${Math.max(0, Math.ceil(mission.timeLeft))}s left`,
+      };
+    }
+    return null;
+  }
+  if (mission.kind === 'stealdeliver') {
+    if (mission.phase === MISSION_PHASE_STEAL) {
+      const car = mission.targetCar;
+      if (!car) return null;
+      return { x: car.x, z: car.z, label: 'Steal the violet coupe' };
+    }
+    if (mission.phase === MISSION_PHASE_DELIVER) {
+      return { x: mission.hideout.x, z: mission.hideout.z, label: 'Deliver it to the chop shop' };
+    }
+    return null;
+  }
+  if (mission.kind === 'finale') {
+    if (mission.phase === MISSION_PHASE_COLLECT) {
+      // Like the first job, the marker is the nearest live drop; the label counts.
+      const got = state.dropsCollected - mission.dropsAtStart;
+      let nearest = null;
+      let nearestD = Infinity;
+      for (const pickup of state.pickups) {
+        if (!pickup.active) continue;
+        const dx = pickup.x - state.player.x;
+        const dz = pickup.z - state.player.z;
+        const d = dx * dx + dz * dz;
+        if (d < nearestD) { nearestD = d; nearest = pickup; }
+      }
+      if (!nearest) return { x: state.player.x, z: state.player.z, label: `Collect ${MISSION6.drops} drops — ${got} so far` };
+      return { x: nearest.x, z: nearest.z, label: `Collect ${MISSION6.drops} drops — ${got} so far` };
+    }
+    if (mission.phase === MISSION_PHASE_RETURN) {
+      return {
+        x: state.city.plaza.x,
+        z: state.city.plaza.z,
+        label: `Return to the plaza — ${MISSION6.drops} drops collected`,
+      };
     }
     return null;
   }

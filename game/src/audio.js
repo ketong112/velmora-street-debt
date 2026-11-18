@@ -5,13 +5,7 @@
 // repeated sounds so they never sound robotic. Nothing plays before the first user
 // gesture (the browser will not allow it), and every call is a safe no-op until then.
 
-const MUSIC_CHORDS = [
-  [110.0, 130.81, 164.81], // Am
-  [87.31, 110.0, 130.81], // F
-  [130.81, 164.81, 196.0], // C
-  [98.0, 123.47, 146.83], // G
-];
-const CHORD_SECONDS = 2.4;
+import { RADIO } from './config.js';
 
 // The master level, linear 0..1 — toDb at the edges turns it into decibels.
 const MASTER_LEVEL = 0.8;
@@ -32,6 +26,7 @@ export function createAudio() {
   let sirenNodes = null;
   let musicTimer = null;
   let musicStep = 0;
+  let station = 0; // the radio station, 0..RADIO.length-1; R cycles it, M mutes all of it
   let muted = false;
   try {
     muted = window.localStorage.getItem('velmora.muted') === '1';
@@ -119,23 +114,43 @@ export function createAudio() {
     src.stop(ctx.currentTime + dur + 0.05);
   }
 
+  /** One chord of the current station: its notes, its wave, its pace. */
   function playChord(step) {
     if (!ctx || musicTimer === null) return;
-    const notes = MUSIC_CHORDS[step % MUSIC_CHORDS.length];
+    const stationDef = RADIO[station];
+    const notes = stationDef.chords[step % stationDef.chords.length];
+    const seconds = stationDef.seconds;
     for (const freq of notes) {
       const osc = ctx.createOscillator();
-      osc.type = 'triangle';
+      osc.type = stationDef.wave;
       osc.frequency.value = freq;
       const gain = ctx.createGain();
       gain.gain.setValueAtTime(0, ctx.currentTime);
-      gain.gain.linearRampToValueAtTime(0.05, ctx.currentTime + 0.5);
-      gain.gain.setValueAtTime(0.05, ctx.currentTime + CHORD_SECONDS - 0.6);
-      gain.gain.linearRampToValueAtTime(0, ctx.currentTime + CHORD_SECONDS);
+      gain.gain.linearRampToValueAtTime(stationDef.vol, ctx.currentTime + 0.5);
+      gain.gain.setValueAtTime(stationDef.vol, ctx.currentTime + seconds - 0.6);
+      gain.gain.linearRampToValueAtTime(0, ctx.currentTime + seconds);
       osc.connect(gain);
       gain.connect(musicBus);
       osc.start();
-      osc.stop(ctx.currentTime + CHORD_SECONDS + 0.05);
+      osc.stop(ctx.currentTime + seconds + 0.05);
     }
+  }
+
+  /** Restart the chord loop on the current station's pace (after a station change). */
+  function restartMusic() {
+    if (musicTimer !== null) {
+      window.clearInterval(musicTimer);
+      musicTimer = null;
+    }
+    if (!ctx) return;
+    musicStep = 0;
+    // The timer goes in first: playChord only plays while a loop is live, and
+    // the first chord should sound now, not a whole pace later.
+    musicTimer = window.setInterval(() => {
+      musicStep += 1;
+      playChord(musicStep);
+    }, RADIO[station].seconds * 1000);
+    playChord(0);
   }
 
   return {
@@ -173,6 +188,13 @@ export function createAudio() {
       if (!ctx) return;
       noise(0.09, 0.55, 1800, 'bandpass', 0.8);
       tone(220, 0.06, 'square', 0.2, sfxBus, 60);
+    },
+    /** A shotgun blast: a deep low boom under a noise crack — nothing like the pistol. */
+    boom() {
+      if (!ctx) return;
+      noise(0.28, 0.7, 500, 'lowpass');
+      tone(110, 0.22, 'sine', 0.55, sfxBus, 40);
+      noise(0.07, 0.5, 1800, 'bandpass', 0.8);
     },
     /** The trigger on an empty magazine: a small dry click. */
     click() {
@@ -258,21 +280,31 @@ export function createAudio() {
       }
       sirenNodes.gain.gain.setTargetAtTime(on ? 0.045 : 0, ctx.currentTime, 0.2);
     },
-    /** The title screen's slow chord loop: Am — F — C — G, one chord at a time. */
+    /** The radio loop: the current station's chords, one at a time. On the title
+     * screen it is the title music; in play it is the car radio. R cycles stations. */
     musicStart() {
       if (!ctx || musicTimer !== null) return;
-      musicStep = 0;
-      playChord(0);
-      musicTimer = window.setInterval(() => {
-        musicStep += 1;
-        playChord(musicStep);
-      }, CHORD_SECONDS * 1000);
+      restartMusic();
     },
     musicStop() {
       if (musicTimer !== null) {
         window.clearInterval(musicTimer);
         musicTimer = null;
       }
+    },
+    /** R cycles the station and restarts the loop on it. Returns the new index. */
+    radioNext() {
+      station = (station + 1) % RADIO.length;
+      if (musicTimer !== null) restartMusic();
+      return station;
+    },
+    /** The station index the loop is on (0 until R is pressed). */
+    radioStation() {
+      return station;
+    },
+    /** The station's name, for the HUD. */
+    radioName() {
+      return RADIO[station].name;
     },
   };
 }

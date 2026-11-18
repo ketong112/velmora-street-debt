@@ -73,7 +73,45 @@ function makeGlowTexture() {
   return texture;
 }
 
-/** Soft grey puff for car smoke: the same radial trick, no image file needed. */
+/** Paint a shop sign: the shop's name in gold on a dark board, no image file needed. */
+function makeShopSignTexture(name) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 64;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#17191d';
+  ctx.fillRect(0, 0, 256, 64);
+  ctx.strokeStyle = '#f2c94c';
+  ctx.lineWidth = 4;
+  ctx.strokeRect(3, 3, 250, 58);
+  ctx.fillStyle = '#f2c94c';
+  ctx.font = 'bold 26px system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(name, 128, 34);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+/** Warm radial glow for the muzzle flash: white-hot centre, orange edge. The
+ * cash-drop glow above is green, and a green flash reads as a pickup, not a
+ * gunshot — so the flash gets its own texture. */
+function makeFlashTexture() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 64;
+  canvas.height = 64;
+  const ctx = canvas.getContext('2d');
+  const grad = ctx.createRadialGradient(32, 32, 2, 32, 32, 30);
+  grad.addColorStop(0, 'rgba(255,244,214,0.95)');
+  grad.addColorStop(0.5, 'rgba(255,190,90,0.4)');
+  grad.addColorStop(1, 'rgba(255,150,40,0)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 64, 64);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
 function makeSmokeTexture() {
   const canvas = document.createElement('canvas');
   canvas.width = 64;
@@ -199,6 +237,7 @@ export function createRenderer(canvas, random) {
 
   const facadeTextures = FACADES.map((f) => makeFacadeTexture(f, random));
   const glowTexture = makeGlowTexture();
+  const flashTexture = makeFlashTexture();
   const smokeTexture = makeSmokeTexture();
 
   const boxGeometry = new THREE.BoxGeometry(1, 1, 1);
@@ -559,6 +598,11 @@ export function createRenderer(canvas, random) {
   let muzzleFlash = null;
   let beacon = null;
   let beaconMarker = null;
+  let heliGroup = null;
+  let heliRotor = null;
+  let heliCone = null;
+  let heliDisc = null;
+  let shopMeshes = [];
 
   /** Build the phase-2 meshes once, aligned with the state arrays by index. */
   function buildPhaseTwo(state) {
@@ -649,11 +693,98 @@ export function createRenderer(canvas, random) {
 
     // The muzzle flash: a bright sprite at the barrel, alive for a frame or two.
     muzzleFlash = new THREE.Sprite(new THREE.SpriteMaterial({
-      map: glowTexture, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+      map: flashTexture, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
       color: 0xffd27a,
     }));
     muzzleFlash.visible = false;
     scene.add(muzzleFlash);
+
+    // The police helicopter: a dark-navy body with a white stripe, a tail, and a
+    // spinning rotor, built once and hidden until the heat hits four stars.
+    heliGroup = new THREE.Group();
+    const heliBody = new THREE.Mesh(boxGeometry, policeBodyMat);
+    heliBody.scale.set(2.4, 1.1, 1.4);
+    heliBody.position.y = 0;
+    heliBody.castShadow = true;
+    const heliStripe = new THREE.Mesh(boxGeometry, new THREE.MeshStandardMaterial({ color: 0xf5f5f5, roughness: 0.4 }));
+    heliStripe.scale.set(2.42, 0.3, 1.42);
+    heliStripe.position.y = 0.1;
+    const heliTail = new THREE.Mesh(boxGeometry, policeBodyMat);
+    heliTail.scale.set(0.35, 0.35, 2.4);
+    heliTail.position.set(0, 0.15, -1.9);
+    heliTail.castShadow = true;
+    const heliFin = new THREE.Mesh(boxGeometry, policeBodyMat);
+    heliFin.scale.set(0.12, 0.9, 0.5);
+    heliFin.position.set(0, 0.5, -3.0);
+    const heliSkidL = new THREE.Mesh(boxGeometry, new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.6 }));
+    heliSkidL.scale.set(0.12, 0.12, 2.6);
+    heliSkidL.position.set(-0.7, -0.7, 0);
+    const heliSkidR = heliSkidL.clone();
+    heliSkidR.position.x = 0.7;
+    heliRotor = new THREE.Group();
+    const rotorBlade = new THREE.Mesh(boxGeometry, new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.5 }));
+    rotorBlade.scale.set(7.5, 0.08, 0.4);
+    rotorBlade.position.y = 0.75;
+    const rotorCross = new THREE.Mesh(boxGeometry, new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.5 }));
+    rotorCross.scale.set(0.4, 0.08, 7.5);
+    rotorCross.position.y = 0.75;
+    heliRotor.add(rotorBlade, rotorCross);
+    heliGroup.add(heliBody, heliStripe, heliTail, heliFin, heliSkidL, heliSkidR, heliRotor);
+    heliGroup.visible = false;
+    scene.add(heliGroup);
+    // The searchlight: a cone from the helicopter to the ground under Rook, plus
+    // a warm pool of light on the street where it lands.
+    heliCone = new THREE.Mesh(
+      new THREE.ConeGeometry(6, 1, 20, 1, true),
+      new THREE.MeshBasicMaterial({
+        color: 0xfff2b0, transparent: true, opacity: 0.16,
+        blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+      }),
+    );
+    heliCone.visible = false;
+    scene.add(heliCone);
+    heliDisc = new THREE.Mesh(
+      new THREE.CircleGeometry(5, 24),
+      new THREE.MeshBasicMaterial({
+        color: 0xfff2b0, transparent: true, opacity: 0.22,
+        blending: THREE.AdditiveBlending, depthWrite: false,
+      }),
+    );
+    heliDisc.rotation.x = -Math.PI / 2;
+    heliDisc.visible = false;
+    scene.add(heliDisc);
+
+    // The shops: a kiosk with a coloured awning and a painted name sign, facing
+    // the plaza so the shelf is readable from the street.
+    shopMeshes = [];
+    for (const shop of state.shops) {
+      const group = new THREE.Group();
+      const wallMat = new THREE.MeshStandardMaterial({ color: 0x2a2f38, roughness: 0.85 });
+      const awningMat = new THREE.MeshStandardMaterial({ color: shop.awning, roughness: 0.7 });
+      const kiosk = new THREE.Mesh(boxGeometry, wallMat);
+      kiosk.scale.set(3.4, 2.6, 2.6);
+      kiosk.position.y = 1.3;
+      kiosk.castShadow = true;
+      const awning = new THREE.Mesh(boxGeometry, awningMat);
+      awning.scale.set(3.6, 0.14, 1.4);
+      awning.position.set(0, 2.35, 1.6);
+      awning.rotation.x = 0.22;
+      const door = new THREE.Mesh(boxGeometry, new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.5 }));
+      door.scale.set(0.9, 1.9, 0.1);
+      door.position.set(0, 0.95, 1.32);
+      const signTexture = makeShopSignTexture(shop.name);
+      const sign = new THREE.Mesh(
+        new THREE.PlaneGeometry(3.2, 0.8),
+        new THREE.MeshStandardMaterial({ map: signTexture, emissive: 0xffffff, emissiveMap: signTexture, emissiveIntensity: 0.25 }),
+      );
+      sign.position.set(0, 3.0, 1.32);
+      group.add(kiosk, awning, door, sign);
+      group.position.set(shop.x, 0, shop.z);
+      // Face the plaza: the sign reads from the street, not from the block behind.
+      group.rotation.y = Math.atan2(-shop.x, -shop.z);
+      scene.add(group);
+      shopMeshes.push({ shop, group });
+    }
   }
 
   /** Sync every phase-2 mesh to the world state for this frame. */
@@ -774,6 +905,29 @@ export function createRenderer(canvas, random) {
       beaconMarker.position.set(objective.x, 4.2 + Math.sin(state.elapsed * 2) * 0.35, objective.z);
       beaconMarker.rotation.y += dt * 1.2;
     }
+    // The helicopter: over Rook at four stars, its rotor spinning, the searchlight
+    // cone from the belly down to the street under him. Gone below four stars.
+    const heli = state.police.heli;
+    const showHeli = !!heli;
+    heliGroup.visible = showHeli;
+    heliCone.visible = showHeli;
+    heliDisc.visible = showHeli;
+    if (showHeli) {
+      heliGroup.position.set(heli.x, heli.y, heli.z);
+      // The nose points at Rook: the searchlight is always on the hunted.
+      heliGroup.rotation.y = Math.atan2(state.player.x - heli.x, state.player.z - heli.z);
+      heliRotor.rotation.y = heli.rotor;
+      const dx = state.player.x - heli.x;
+      const dz = state.player.z - heli.z;
+      const dist = Math.hypot(dx, heli.y, dz);
+      // The cone's +Y is its apex: point it at the helicopter, sit it halfway
+      // between the belly and the street, and stretch it to the distance.
+      scratchDir.set(-dx, heli.y, -dz).normalize();
+      heliCone.quaternion.setFromUnitVectors(UP, scratchDir);
+      heliCone.position.set((heli.x + state.player.x) / 2, heli.y / 2, (heli.z + state.player.z) / 2);
+      heliCone.scale.set(1, dist, 1);
+      heliDisc.position.set(state.player.x, 0.06, state.player.z);
+    }
   }
 
   function resize() {
@@ -793,6 +947,7 @@ export function createRenderer(canvas, random) {
   const scratchDesired = new THREE.Vector3();
   const scratchPos = new THREE.Vector3();
   const scratchAhead = new THREE.Vector3();
+  const UP = new THREE.Vector3(0, 1, 0);
 
   /** Walk from `from` toward `to`, stopping just before a building: the camera's collision. */
   function collisionDistance(from, to, city) {

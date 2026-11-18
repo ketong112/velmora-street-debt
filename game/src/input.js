@@ -11,6 +11,8 @@ export const ACTION_ENTER = 4;
 export const ACTION_PUNCH = 8;
 export const ACTION_FIRE = 16;
 export const ACTION_MUTE = 32;
+export const ACTION_RADIO = 64;
+export const ACTION_WEAPON = 128;
 
 const FORWARD = new Set(['KeyW', 'ArrowUp']);
 const BACK = new Set(['KeyS', 'ArrowDown']);
@@ -23,6 +25,9 @@ const ENTER = new Set(['KeyE']);
 const PUNCH = new Set(['KeyF']);
 const FIRE = new Set(['KeyG']);
 const MUTE = new Set(['KeyM']);
+const RADIO = new Set(['KeyR']);
+const WEAPON = new Set(['KeyQ']);
+const BUY = new Set(['Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5']);
 
 // The camera starts slightly above level, looking down the avenue a touch.
 const START_PITCH = 0.22;
@@ -30,6 +35,7 @@ const START_PITCH = 0.22;
 export function createInput(target) {
   const keys = new Set();
   let actions = 0;
+  let buyDigit = 0; // the shop shelf number pressed since the last take, 0 when none
   let yaw = Math.PI; // north of Rook, looking south down the avenue he starts on
   let pitch = START_PITCH;
   let lockLost = false;
@@ -56,6 +62,18 @@ export function createInput(target) {
     } else if (MUTE.has(event.code)) {
       if (!event.repeat) actions |= ACTION_MUTE;
       event.preventDefault();
+    } else if (RADIO.has(event.code)) {
+      if (!event.repeat) actions |= ACTION_RADIO;
+      event.preventDefault();
+    } else if (WEAPON.has(event.code)) {
+      if (!event.repeat) actions |= ACTION_WEAPON;
+      event.preventDefault();
+    } else if (BUY.has(event.code)) {
+      // Digits are the shop shelf: 1-5 buys that item when Rook stands at a shop.
+      // They are a separate one-shot queue (not an ACTION flag) so the loop knows
+      // WHICH shelf was pressed, and a press away from a shop simply does nothing.
+      if (!event.repeat) buyDigit = Number(event.code.slice(5));
+      event.preventDefault();
     } else if (PAUSE.has(event.code)) {
       if (!event.repeat) actions |= ACTION_PAUSE;
       event.preventDefault();
@@ -70,6 +88,7 @@ export function createInput(target) {
   window.addEventListener('blur', () => {
     keys.clear();
     actions = 0;
+    buyDigit = 0;
   });
 
   // Pointer lock is requested on click; a click also counts as CONFIRM, which is
@@ -129,6 +148,12 @@ export function createInput(target) {
     takeActions() {
       const taken = actions;
       actions = 0;
+      return taken;
+    },
+    /** The shop shelf number pressed since the last call, 0 when none. */
+    takeBuy() {
+      const taken = buyDigit;
+      buyDigit = 0;
       return taken;
     },
   };

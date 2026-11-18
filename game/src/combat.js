@@ -8,7 +8,7 @@
 
 import { COMBAT, ENFORCER } from './config.js';
 import { collidesWithCity } from './city.js';
-import { addWanted } from './police.js';
+import { addWanted, damagePlayer } from './police.js';
 
 const TWO_PI = Math.PI * 2;
 
@@ -23,7 +23,7 @@ function angleDelta(from, to) {
   return d;
 }
 
-/** Combat state: cooldowns, the pistol, the parcel, and the enforcers. */
+/** Combat state: cooldowns, the pistol, the shotgun, the parcel, and the enforcers. */
 export function createCombat() {
   return {
     punchCooldown: 0,
@@ -33,6 +33,9 @@ export function createCombat() {
     hasPistol: false,
     ammo: 0,
     pistol: null, // { x, z, taken } — the pickup, once the story leaves it out
+    weapon: 'pistol', // the gun in hand: 'pistol' or 'shotgun' (Q cycles, once both are owned)
+    hasShotgun: false,
+    shells: 0,
     hasPackage: false,
     enforcers: [],
   };
@@ -156,18 +159,27 @@ export function tryPunch(combat, state) {
 }
 
 /**
- * G to fire, on foot only, pistol in hand. Hit-scan along the camera's aim: the
+ * G to fire, on foot only, a gun in hand. Hit-scan along the camera's aim: the
  * nearest hostile within a narrow cone takes the round. Returns { fired, empty,
- * hit, down } — fired when a round left the barrel, empty when the trigger clicked
- * on an empty magazine.
+ * hit, down, weapon } — fired when a round left the barrel, empty when the trigger
+ * clicked on an empty magazine, weapon the gun that fired.
+ *
+ * The shotgun is a different shot: one shell, a wide cone, every hostile inside
+ * it takes pellets at once. Up close it drops a cop in one pull; at range the
+ * pellets spread thin and it is a loud way to miss.
  */
 export function tryFire(combat, state, camYaw) {
-  if (state.inCar || combat.fireCooldown > 0 || !combat.hasPistol) {
-    return { fired: false, empty: false, hit: false, down: null };
+  if (state.inCar || combat.fireCooldown > 0) {
+    return { fired: false, empty: false, hit: false, down: null, weapon: combat.weapon };
+  }
+  const weapon = combat.weapon === 'shotgun' && combat.hasShotgun ? 'shotgun' : 'pistol';
+  if (weapon === 'shotgun') return tryFireShotgun(combat, state, camYaw);
+  if (!combat.hasPistol) {
+    return { fired: false, empty: false, hit: false, down: null, weapon: 'pistol' };
   }
   if (combat.ammo <= 0) {
     combat.fireCooldown = COMBAT.fireCooldown;
-    return { fired: false, empty: true, hit: false, down: null };
+    return { fired: false, empty: true, hit: false, down: null, weapon: 'pistol' };
   }
   combat.ammo -= 1;
   combat.fireCooldown = COMBAT.fireCooldown;
@@ -192,14 +204,64 @@ export function tryFire(combat, state, camYaw) {
     bestD = d2;
     best = target;
   }
-  if (!best) return { fired: true, empty: false, hit: false, down: null };
+  if (!best) return { fired: true, empty: false, hit: false, down: null, weapon: 'pistol' };
   // A gunshot hits as hard as a punch, but from across the street. The knockback
   // is halved on purpose: a full shove would push the target out of the next
   // shot's cone and make follow-up shots feel like misses.
   best.ref.hp -= COMBAT.fireDamage;
   knockback(best.ref, state.player, COMBAT.punchKnockback * 0.5);
   const down = downTarget(best, state);
-  return { fired: true, empty: false, hit: true, down };
+  return { fired: true, empty: false, hit: true, down, weapon: 'pistol' };
+}
+
+/**
+ * The shotgun's shot: one shell, a wide cone, every hostile inside it takes
+ * pellets. Returns the same shape as tryFire, with weapon 'shotgun'.
+ */
+function tryFireShotgun(combat, state, camYaw) {
+  if (combat.shells <= 0) {
+    combat.fireCooldown = COMBAT.shotgunCooldown;
+    return { fired: false, empty: true, hit: false, down: null, weapon: 'shotgun' };
+  }
+  combat.shells -= 1;
+  combat.fireCooldown = COMBAT.shotgunCooldown;
+  combat.muzzle = MUZZLE_SECONDS;
+  const dx = -Math.sin(camYaw);
+  const dz = -Math.cos(camYaw);
+  const player = state.player;
+  player.heading = Math.atan2(dx, dz);
+  let hit = false;
+  let down = null;
+  const cosLimit = Math.cos(COMBAT.shotgunArc);
+  for (const target of hostiles(state)) {
+    const tx = target.x - player.x;
+    const tz = target.z - player.z;
+    const d2 = tx * tx + tz * tz;
+    if (d2 >= COMBAT.shotgunRange * COMBAT.shotgunRange) continue;
+    const d = Math.sqrt(d2) || 1;
+    const cos = (tx * dx + tz * dz) / d;
+    if (cos < cosLimit) continue;
+    // Pellets at close range hit harder: point-blank is a full blast, the far
+    // edge of the cone is a graze. A cop has 2 health, an enforcer 3.
+    const damage = d < 6 ? COMBAT.shotgunPelletDamage * 2 : COMBAT.shotgunPelletDamage;
+    target.ref.hp -= damage;
+    knockback(target.ref, state.player, COMBAT.punchKnockback);
+    hit = true;
+    const wentDown = downTarget(target, state);
+    if (wentDown) down = wentDown;
+  }
+  return { fired: true, empty: false, hit, down, weapon: 'shotgun' };
+}
+
+/**
+ * Q to switch guns, on foot only: cycles pistol <-> shotgun when both are owned.
+ * Returns the gun now in hand, or null when there is nothing to switch to.
+ */
+export function trySwitchWeapon(combat, state) {
+  if (state.inCar) return null;
+  if (!combat.hasPistol || !combat.hasShotgun) return null;
+  combat.weapon = combat.weapon === 'shotgun' ? 'pistol' : 'shotgun';
+  return combat.weapon;
 }
 
 /** The pistol pickup: walk over it and the pistol is yours, 12 rounds. */
@@ -266,13 +328,10 @@ export function stepEnforcers(combat, state, dt) {
     // the fight would stop being a brawl.
     if (!state.inCar && dist < ENFORCER.attackRange && e.attackCooldown <= 0) {
       e.attackCooldown = ENFORCER.attackCooldown;
-      player.health -= ENFORCER.attackDamage;
       player.x += (dx / dist) * 0.8;
       player.z += (dz / dist) * 0.8;
-      if (player.health <= 0) {
-        player.health = 0;
-        return 1;
-      }
+      // Armor eats the punch first (damagePlayer), like every other hit in the game.
+      if (damagePlayer(state, ENFORCER.attackDamage)) return 1;
     }
   }
   return 0;

@@ -3,7 +3,10 @@
 // there. The game moves between four screens: title, play, paused and busted. On the title
 // the camera drifts over the plaza while the city idles; in play Rook walks Port Velmora
 // collecting cash drops toward his debt — or drives a car he just stole, with the police
-// after him. Busted ends the run until Space starts it again.
+// after him, and at four stars a helicopter circling overhead. Six missions pay the debt
+// down; between jobs he can tune the radio (R), buy medkits, armor and shells at the
+// shops (1-5), and switch between the pistol and the shotgun (Q). Busted ends the run
+// until Space starts it again.
 //
 // ?seed=N fixes the city. ?shot=start|play|end (with &seed=N) stages that scene instead
 // of running the loop, paints it twice and sets window.__shotReady for a screenshot.
@@ -23,14 +26,17 @@ import {
   EVENT_MISSION_PACKAGE,
   EVENT_MISSION_RETURN,
   EVENT_MISSION_START,
+  EVENT_MISSION_STEAL,
   EVENT_PISTOL,
   EVENT_PUNCH,
   EVENT_PUNCH_HIT,
+  EVENT_SHOP,
   EVENT_SHOT,
   EVENT_SHOT_EMPTY,
   EVENT_SHOT_HIT,
   EVENT_SMOKE,
   EVENT_STEAL,
+  EVENT_WEAPON,
   createWorld,
 } from './world.js';
 import {
@@ -40,6 +46,8 @@ import {
   ACTION_MUTE,
   ACTION_PAUSE,
   ACTION_PUNCH,
+  ACTION_RADIO,
+  ACTION_WEAPON,
   createInput,
 } from './input.js';
 import { createRenderer, SCREEN_PAUSED, SCREEN_PLAY, SCREEN_TITLE } from './render.js';
@@ -126,6 +134,7 @@ function runGame() {
   let enterPressed = false; // the E press for this frame's step
   let punchPressed = false; // the F press for this frame's step
   let firePressed = false; // the G press for this frame's step
+  let weaponPressed = false; // the Q press for this frame's step
   let hitStop = 0; // a punch that lands freezes the world for a beat (game feel)
 
   // Screen readers (and anyone watching the page's text) hear the screen changes and each drop.
@@ -141,7 +150,8 @@ function runGame() {
       return;
     }
     const done = save.missionsDone.length;
-    const job = done === 0 ? 'The First Drop' : done === 1 ? 'The Midnight Parcel' : done === 2 ? 'The Getaway' : 'all jobs done';
+    const jobs = ['The First Drop', 'The Midnight Parcel', 'The Getaway', 'The Long Haul', 'The Chop Shop', 'The Last Haul'];
+    const job = done < jobs.length ? jobs[done] : 'all jobs done';
     continueButton.textContent = `Continue — $${save.cash.toLocaleString('en-US')} banked · next: ${job}`;
     continueButton.classList.remove('hidden');
   }
@@ -151,6 +161,7 @@ function runGame() {
     enterPressed = false;
     punchPressed = false;
     firePressed = false;
+    weaponPressed = false;
   }
 
   function startGame() {
@@ -161,7 +172,9 @@ function runGame() {
     hitStop = 0;
     screen = SCREEN_PLAY;
     showOnly(screen);
-    audio.musicStop();
+    // The radio keeps playing into the run: on the title it was the title music,
+    // in play it is the car radio. musicStart is a no-op if the loop already runs.
+    audio.musicStart();
     hud.toast(`Debt ${STORY.debt.toLocaleString('en-US')} — collect the green drops.`, 4);
     announce(`Playing. Collect cash drops to pay the ${STORY.debt} debt.`);
   }
@@ -178,7 +191,7 @@ function runGame() {
     hitStop = 0;
     screen = SCREEN_PLAY;
     showOnly(screen);
-    audio.musicStop();
+    audio.musicStart();
     hud.toast(`Welcome back — debt $${(STORY.debt - world.state.cash).toLocaleString('en-US')} left.`, 4);
     announce('Playing. Save loaded.');
   }
@@ -209,6 +222,14 @@ function runGame() {
     if (actions & ACTION_ENTER) enterPressed = true;
     if (actions & ACTION_PUNCH) punchPressed = true;
     if (actions & ACTION_FIRE) firePressed = true;
+    if (actions & ACTION_WEAPON) weaponPressed = true;
+    if (actions & ACTION_RADIO) {
+      // R cycles the radio station, on the title and in play: the loop restarts
+      // on the new station, and the HUD shows it. M still mutes everything.
+      const station = audio.radioNext();
+      world.state.radioStation = station;
+      if (screen === SCREEN_PLAY) hud.toast(`📻 ${audio.radioName()}`, 2);
+    }
     if (actions & ACTION_MUTE) {
       const muted = audio.toggleMute();
       if (screen === SCREEN_PLAY) hud.toast(muted ? 'Sound off (M to turn back on).' : 'Sound on.', 2);
@@ -241,9 +262,13 @@ function runGame() {
     if (enterPressed) opts.enter = true;
     if (punchPressed) opts.punch = true;
     if (firePressed) opts.fire = true;
+    if (weaponPressed) opts.weapon = true;
+    const buy = input.takeBuy();
+    if (buy) opts.buy = buy;
     enterPressed = false;
     punchPressed = false;
     firePressed = false;
+    weaponPressed = false;
     const events = world.step(STEP, move.x, move.z, input.yaw(), input.sprint(), false, opts);
     if (events & EVENT_COIN) {
       coined = true;
@@ -275,13 +300,27 @@ function runGame() {
       // A whiff: the arm still went out, nothing connected. No toast — it is every-day.
     }
     if (events & EVENT_SHOT_HIT) {
-      audio.shot();
+      // The shotgun booms, the pistol cracks: the sound follows the gun that fired.
+      if (world.state.lastShotWeapon === 'shotgun') audio.boom();
+      else audio.shot();
       hud.toast('Hit!', 2);
     } else if (events & EVENT_SHOT) {
-      audio.shot();
+      if (world.state.lastShotWeapon === 'shotgun') audio.boom();
+      else audio.shot();
     } else if (events & EVENT_SHOT_EMPTY) {
       audio.click();
-      hud.toast('Out of ammo — the pistol is dry.', 3);
+      hud.toast(
+        world.state.lastShotWeapon === 'shotgun'
+          ? 'Out of shells — buy more at Iron & Ammo.'
+          : 'Out of ammo — the pistol is dry.',
+        3,
+      );
+    }
+    if (events & EVENT_SHOP) {
+      if (world.state.shopNotice) hud.toast(world.state.shopNotice, 3);
+    }
+    if (events & EVENT_WEAPON) {
+      if (world.state.weaponNotice) hud.toast(world.state.weaponNotice, 2);
     }
     if (events & EVENT_PISTOL) {
       audio.chime();
@@ -304,17 +343,34 @@ function runGame() {
       }
     }
     if (events & EVENT_MISSION_RETURN) {
-      hud.toast('$1,500 collected — return to the plaza!', 5);
+      const mission = world.state.missions.list[world.state.missions.index];
+      const payout = mission && mission.payout ? ` $${mission.payout.toLocaleString('en-US')}` : '';
+      hud.toast(`${payout} collected — return to the plaza!`, 5);
       announce('Mission: return to the plaza.');
     }
     if (events & EVENT_MISSION_PACKAGE) {
-      hud.toast('Parcel secured — drive it across town, fast!', 5);
-      announce('Parcel picked up. Deliver it before the timer ends.');
+      const mission = world.state.missions.list[world.state.missions.index];
+      if (mission && mission.kind === 'smuggle') {
+        hud.toast('Contraband secured — run it across town, fast! The docks noticed you. ★', 5);
+        announce('Contraband picked up. Deliver it before the timer ends.');
+      } else {
+        hud.toast('Parcel secured — drive it across town, fast!', 5);
+        announce('Parcel picked up. Deliver it before the timer ends.');
+      }
     }
     if (events & EVENT_MISSION_FAIL) {
+      const mission = world.state.missions.list[world.state.missions.index];
       audio.fail();
-      hud.toast('Too slow — the parcel missed its window. Try again.', 5);
+      if (mission && mission.kind === 'smuggle') {
+        hud.toast('Too slow — the contraband missed its buyer. Try again.', 5);
+      } else {
+        hud.toast('Too slow — the parcel missed its window. Try again.', 5);
+      }
       announce('Delivery failed. The job resets to the pickup.');
+    }
+    if (events & EVENT_MISSION_STEAL) {
+      hud.toast('Violet coupe stolen — deliver it to the chop shop!', 5);
+      announce('Violet coupe stolen. Deliver it to the chop shop.');
     }
     if (events & EVENT_MISSION_EVADE) {
       hud.toast('Three stars! Lose the heat, then reach the hideout.', 5);

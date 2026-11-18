@@ -35,6 +35,12 @@ export function readSave() {
     best: typeof data.best === 'number' && Number.isFinite(data.best) ? Math.max(0, Math.floor(data.best)) : 0,
     hasPistol: data.hasPistol === true,
     ammo: typeof data.ammo === 'number' && Number.isFinite(data.ammo) ? Math.max(0, Math.floor(data.ammo)) : 0,
+    // Round-2 fields: a save from round 1 has none of these, so each defaults
+    // to "never bought" rather than failing validation.
+    hasShotgun: data.hasShotgun === true,
+    shells: typeof data.shells === 'number' && Number.isFinite(data.shells) ? Math.max(0, Math.floor(data.shells)) : 0,
+    weapon: data.weapon === 'shotgun' ? 'shotgun' : 'pistol',
+    armor: typeof data.armor === 'number' && Number.isFinite(data.armor) ? Math.max(0, Math.floor(data.armor)) : 0,
   };
 }
 
@@ -48,6 +54,10 @@ export function captureSave(state, best) {
     best: Math.max(0, Math.floor(best)),
     hasPistol: state.combat.hasPistol,
     ammo: state.combat.ammo,
+    hasShotgun: state.combat.hasShotgun,
+    shells: state.combat.shells,
+    weapon: state.combat.weapon,
+    armor: state.player.armor,
   };
 }
 
@@ -89,4 +99,10 @@ export function applySave(state, save) {
   state.missions.index = Math.min(done, state.missions.list.length);
   state.combat.hasPistol = save.hasPistol;
   state.combat.ammo = save.ammo;
+  state.combat.hasShotgun = save.hasShotgun;
+  state.combat.shells = save.shells;
+  // The saved gun only loads if it is owned: a shotgun in the save without the
+  // gun itself (a hand edit) falls back to the pistol.
+  state.combat.weapon = save.weapon === 'shotgun' && save.hasShotgun ? 'shotgun' : 'pistol';
+  state.player.armor = save.armor;
 }
