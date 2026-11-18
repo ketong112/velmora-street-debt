@@ -1,8 +1,8 @@
 # VELMORA: Street Debt
 
-![origin](https://make.fun/badge/gta6-01/ketong112/velmora-street-debt/origin.svg)
-![rank](https://make.fun/badge/gta6-01/ketong112/velmora-street-debt/rank.svg)
-![reward](https://make.fun/badge/gta6-01/ketong112/velmora-street-debt/reward.svg)
+[![make.fun · gta6-01](https://make.fun/badge/gta6-01.svg)](https://make.fun/bounty/gta6-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
+[![rank](https://make.fun/badge/gta6-01/ketong112/velmora-street-debt/rank.svg)](https://make.fun/bounty/gta6-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
+[![reward](https://make.fun/badge/gta6-01/ketong112/velmora-street-debt/reward.svg)](https://make.fun/bounty/gta6-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
 
 An open-world crime game built for make.fun's [Make GTA 6](https://make.fun/bounty/gta6-01) bounty ($1,666 in USDC). Fully original: the city of Port Velmora, its people, its cars and its story are all our own — nothing from Rockstar or any commercial game.
 
