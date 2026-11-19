@@ -5,7 +5,7 @@
 // models: every texture is painted on a canvas in code, every mesh built from boxes.
 
 import * as THREE from 'three';
-import { CAMERA, CAR, CITY, DAY, ENFORCER, PALETTE, PED, SKY, SUN } from './config.js';
+import { CAMERA, CAR, CITY, DAY, ENFORCER, GARAGE, PALETTE, PED, SAFEHOUSE, SKY, SUN } from './config.js';
 import { FACADES } from './city.js';
 import { createPlayerMesh, playerPickupPop, updatePlayerMesh } from './player.js';
 
@@ -553,6 +553,22 @@ export function createRenderer(canvas, random) {
     tail.scale.set(CAR.width - 0.4, 0.14, 0.1);
     tail.position.set(0, 0.62, -CAR.length / 2 - 0.01);
     group.add(tail);
+    // The spoiler: a flat wing on two struts at the back. Hidden until the garage
+    // bolts an engine tune on — the visible proof the car is tuned.
+    const spoiler = new THREE.Group();
+    const spoilerWing = new THREE.Mesh(boxGeometry, new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.4 }));
+    spoilerWing.scale.set(CAR.width - 0.2, 0.08, 0.5);
+    spoilerWing.position.y = 1.35;
+    const spoilerStrutL = new THREE.Mesh(boxGeometry, spoilerWing.material);
+    spoilerStrutL.scale.set(0.08, 0.35, 0.08);
+    spoilerStrutL.position.set(-0.6, 1.15, 0);
+    const spoilerStrutR = new THREE.Mesh(boxGeometry, spoilerWing.material);
+    spoilerStrutR.scale.set(0.08, 0.35, 0.08);
+    spoilerStrutR.position.set(0.6, 1.15, 0);
+    spoiler.add(spoilerWing, spoilerStrutL, spoilerStrutR);
+    spoiler.position.z = -CAR.length / 2 + 0.3;
+    spoiler.visible = false;
+    group.add(spoiler);
     let lightL = null;
     let lightR = null;
     if (isPolice) {
@@ -564,7 +580,7 @@ export function createRenderer(canvas, random) {
       lightR.position.set(0.28, 1.48, -0.25);
       group.add(lightL, lightR);
     }
-    return { group, lightL, lightR };
+    return { group, body, spoiler, lightL, lightR };
   }
 
   /** A walker from boxes: legs, torso, head. Shirt colour varies; cops are navy. */
@@ -603,6 +619,8 @@ export function createRenderer(canvas, random) {
   let heliCone = null;
   let heliDisc = null;
   let shopMeshes = [];
+  let safehouseMarker = null;
+  let garageMarker = null;
 
   /** Build the phase-2 meshes once, aligned with the state arrays by index. */
   function buildPhaseTwo(state) {
@@ -785,6 +803,104 @@ export function createRenderer(canvas, random) {
       scene.add(group);
       shopMeshes.push({ shop, group });
     }
+
+    // The safehouse: a small house with a pitched roof, warm lit windows and a
+    // painted sign — Rook's place, the one address that is his. A green diamond
+    // bobs over the door so it reads as a place, not just a building.
+    const houseGroup = new THREE.Group();
+    const houseWallMat = new THREE.MeshStandardMaterial({ color: 0x8a6f4d, roughness: 0.9 });
+    const houseRoofMat = new THREE.MeshStandardMaterial({ color: 0x5b3a2e, roughness: 0.9 });
+    const houseWalls = new THREE.Mesh(boxGeometry, houseWallMat);
+    houseWalls.scale.set(3.8, 2.4, 3.2);
+    houseWalls.position.y = 1.2;
+    houseWalls.castShadow = true;
+    const houseRoof = new THREE.Mesh(boxGeometry, houseRoofMat);
+    houseRoof.scale.set(4.2, 0.5, 3.6);
+    houseRoof.position.y = 2.6;
+    houseRoof.rotation.z = 0.0;
+    houseRoof.castShadow = true;
+    const houseRoofTop = new THREE.Mesh(boxGeometry, houseRoofMat);
+    houseRoofTop.scale.set(2.2, 0.5, 3.6);
+    houseRoofTop.position.y = 3.0;
+    const houseDoor = new THREE.Mesh(boxGeometry, new THREE.MeshStandardMaterial({ color: 0x2e4a3a, roughness: 0.6 }));
+    houseDoor.scale.set(0.9, 1.9, 0.1);
+    houseDoor.position.set(0, 0.95, 1.62);
+    const houseWindowMat = new THREE.MeshStandardMaterial({ color: 0xffd27a, emissive: 0xffb84d, emissiveIntensity: 0.8 });
+    const houseWindowL = new THREE.Mesh(boxGeometry, houseWindowMat);
+    houseWindowL.scale.set(0.8, 0.8, 0.1);
+    houseWindowL.position.set(-1.1, 1.4, 1.62);
+    const houseWindowR = new THREE.Mesh(boxGeometry, houseWindowMat);
+    houseWindowR.scale.set(0.8, 0.8, 0.1);
+    houseWindowR.position.set(1.1, 1.4, 1.62);
+    const houseSignTexture = makeShopSignTexture(SAFEHOUSE.name);
+    const houseSign = new THREE.Mesh(
+      new THREE.PlaneGeometry(3.4, 0.85),
+      new THREE.MeshStandardMaterial({ map: houseSignTexture, emissive: 0xffffff, emissiveMap: houseSignTexture, emissiveIntensity: 0.25 }),
+    );
+    houseSign.position.set(0, 3.6, 1.7);
+    houseGroup.add(houseWalls, houseRoof, houseRoofTop, houseDoor, houseWindowL, houseWindowR, houseSign);
+    houseGroup.position.set(SAFEHOUSE.x, 0, SAFEHOUSE.z);
+    // Face the street: the door and the sign read from the intersection.
+    houseGroup.rotation.y = Math.atan2(-SAFEHOUSE.x, -SAFEHOUSE.z);
+    scene.add(houseGroup);
+    safehouseMarker = new THREE.Mesh(
+      new THREE.OctahedronGeometry(0.7),
+      new THREE.MeshStandardMaterial({ color: 0x37d67a, emissive: 0x37d67a, emissiveIntensity: 0.9 }),
+    );
+    safehouseMarker.position.set(SAFEHOUSE.x, 4.4, SAFEHOUSE.z);
+    safehouseMarker.castShadow = true;
+    scene.add(safehouseMarker);
+
+    // The garage: a wide workshop with a dark open bay, a painted sign and a
+    // tyre stack by the door — plus the yellow bay lines on the street in front,
+    // where a car waits to be tuned. A blue diamond bobs over the door.
+    const garageGroup = new THREE.Group();
+    const garageWallMat = new THREE.MeshStandardMaterial({ color: 0x3a4250, roughness: 0.85 });
+    const garageBox = new THREE.Mesh(boxGeometry, garageWallMat);
+    garageBox.scale.set(4.2, 3.0, 3.4);
+    garageBox.position.y = 1.5;
+    garageBox.castShadow = true;
+    const garageDoor = new THREE.Mesh(boxGeometry, new THREE.MeshStandardMaterial({ color: 0x111318, roughness: 0.5 }));
+    garageDoor.scale.set(2.6, 2.2, 0.1);
+    garageDoor.position.set(0, 1.1, 1.72);
+    const tyreMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.9 });
+    for (let i = 0; i < 3; i += 1) {
+      const tyre = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.55, 0.3, 12), tyreMat);
+      tyre.position.set(2.6, 0.15 + i * 0.32, 1.2);
+      tyre.castShadow = true;
+      garageGroup.add(tyre);
+    }
+    const garageSignTexture = makeShopSignTexture(GARAGE.name);
+    const garageSign = new THREE.Mesh(
+      new THREE.PlaneGeometry(3.6, 0.9),
+      new THREE.MeshStandardMaterial({ map: garageSignTexture, emissive: 0xffffff, emissiveMap: garageSignTexture, emissiveIntensity: 0.25 }),
+    );
+    garageSign.position.set(0, 3.4, 1.72);
+    garageGroup.add(garageBox, garageDoor, garageSign);
+    garageGroup.position.set(GARAGE.x, 0, GARAGE.z);
+    garageGroup.rotation.y = Math.atan2(-GARAGE.x, -GARAGE.z);
+    scene.add(garageGroup);
+    // The bay lines: four thin yellow strips marking the parking bay on the
+    // street in front of the garage door.
+    const bayMat = new THREE.MeshStandardMaterial({ color: 0xf2c94c, roughness: 0.6 });
+    const bayX = GARAGE.bayX;
+    const bayZ = GARAGE.bayZ;
+    for (const [bx, bz, bw, bd] of [
+      [bayX - 3.4, bayZ, 0.25, 7], [bayX + 3.4, bayZ, 0.25, 7],
+      [bayX, bayZ - 3.4, 7, 0.25], [bayX, bayZ + 3.4, 7, 0.25],
+    ]) {
+      const line = new THREE.Mesh(boxGeometry, bayMat);
+      line.scale.set(bw, 0.04, bd);
+      line.position.set(bx, 0.03, bz);
+      scene.add(line);
+    }
+    garageMarker = new THREE.Mesh(
+      new THREE.OctahedronGeometry(0.7),
+      new THREE.MeshStandardMaterial({ color: 0x3b82f6, emissive: 0x3b82f6, emissiveIntensity: 0.9 }),
+    );
+    garageMarker.position.set(GARAGE.x, 4.4, GARAGE.z);
+    garageMarker.castShadow = true;
+    scene.add(garageMarker);
   }
 
   /** Sync every phase-2 mesh to the world state for this frame. */
@@ -794,6 +910,16 @@ export function createRenderer(canvas, random) {
       if (!car) continue;
       entry.group.position.set(car.x, 0, car.z);
       entry.group.rotation.y = car.heading;
+      // A parked car's paint and spoiler follow its tuning: a paint job swaps
+      // the body material, an engine tune shows the spoiler. Traffic cars have
+      // no tuning record, so they keep their factory paint.
+      if (car.tuning && entry.body) {
+        if (entry.lastColor !== car.color) {
+          entry.lastColor = car.color;
+          entry.body.material = carBodyMats[car.color % carBodyMats.length];
+        }
+        if (entry.spoiler) entry.spoiler.visible = car.tuning.engine >= 1;
+      }
     }
     // Police pool: bind each visible slot to a live police car, flash its light bar.
     const lightOn = Math.floor(state.police.lightPhase * LIGHT_FLASH_RATE) % 2 === 0;
@@ -904,6 +1030,15 @@ export function createRenderer(canvas, random) {
       beacon.position.set(objective.x, 17, objective.z);
       beaconMarker.position.set(objective.x, 4.2 + Math.sin(state.elapsed * 2) * 0.35, objective.z);
       beaconMarker.rotation.y += dt * 1.2;
+    }
+    // The safehouse and garage diamonds bob over their doors, like the beacon.
+    if (safehouseMarker) {
+      safehouseMarker.position.y = 4.4 + Math.sin(state.elapsed * 2) * 0.3;
+      safehouseMarker.rotation.y += dt * 1.2;
+    }
+    if (garageMarker) {
+      garageMarker.position.y = 4.4 + Math.sin(state.elapsed * 2 + 1) * 0.3;
+      garageMarker.rotation.y += dt * 1.2;
     }
     // The helicopter: over Rook at four stars, its rotor spinning, the searchlight
     // cone from the belly down to the street under him. Gone below four stars.

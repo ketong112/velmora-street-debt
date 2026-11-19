@@ -3,6 +3,12 @@
 // RAM. Heat rises when the player commits a crime in front of the law and falls when
 // nobody has seen him for a while; the HUD stars are just this module's number.
 //
+// Line of sight: a cop only spots Rook when the street between them is clear.
+// A building in the way breaks the sightline — duck behind one and the heat
+// starts to drop. A cop who loses sight chases the last place he saw Rook for
+// a while, then gives up and idles. The helicopter watches from the sky, so
+// only the safehouse hides Rook from it.
+//
 // Rules of the street:
 //  - 1-2 stars: foot cops chase on foot. They are faster than a walk, slower than a
 //    sprint, and they only grab a player on foot. They walk the streets like everyone
@@ -12,8 +18,8 @@
 //    a direct ram only when close. A ram costs health, and at 0 health the player is
 //    busted. A car that stops making progress falls back to the grid instead of
 //    grinding into a wall forever.
-//  - Out of sight (no police within sight range) for POLICE.decayDelay seconds, one
-//    star drops off. At 0 stars the police leave.
+//  - Out of sight (no police within sight range with a clear line of sight) for
+//    POLICE.decayDelay seconds, one star drops off. At 0 stars the police leave.
 
 import { POLICE, TRAFFIC, WANTED } from './config.js';
 import { collidesWithCity } from './city.js';
@@ -54,7 +60,50 @@ function makePoliceCar(x, z, heading, axis, dir, street, id) {
 }
 
 export function createPolice() {
-  return { footCops: [], cars: [], unseenTimer: 0, lightPhase: 0, heli: null };
+  return {
+    footCops: [],
+    cars: [],
+    unseenTimer: 0,
+    lightPhase: 0,
+    heli: null,
+    // The last place any cop saw Rook, and when: the hunt runs on this when the
+    // sightline is gone. `spotted` is what the HUD reads: seen right now, or hidden.
+    lastSeen: null,
+    lastSeenAt: 0,
+    spotted: false,
+  };
+}
+
+/**
+ * Line of sight between two points on the street: true when no building stands
+ * between them. Sampled every POLICE.losStep metres along the segment — a
+ * building footprint crossed at any sample blocks the sightline. Cheap enough
+ * to run for every cop every step: the city holds a few dozen buildings.
+ */
+export function hasLineOfSight(city, ax, az, bx, bz) {
+  const dx = bx - ax;
+  const dz = bz - az;
+  const dist = Math.hypot(dx, dz);
+  const steps = Math.max(1, Math.ceil(dist / POLICE.losStep));
+  for (let i = 1; i < steps; i += 1) {
+    const t = i / steps;
+    const x = ax + dx * t;
+    const z = az + dz * t;
+    for (const b of city.buildings) {
+      if (x > b.x - b.w / 2 && x < b.x + b.w / 2 && z > b.z - b.d / 2 && z < b.z + b.d / 2) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+/** True when the watcher at (x, z) can see the player: in range, and a clear line. */
+function canSee(city, x, z, player) {
+  const dx = player.x - x;
+  const dz = player.z - z;
+  if (dx * dx + dz * dz >= POLICE.sightRange * POLICE.sightRange) return false;
+  return hasLineOfSight(city, x, z, player.x, player.z);
 }
 
 // How many random street points to try before falling back to a point behind the player.
@@ -226,8 +275,17 @@ function driveAlongRoad(car, city, dt, targetSpeed) {
  */
 function stepPoliceCar(car, state, dt, player, playerCar) {
   const city = state.city;
-  const tx = playerCar ? playerCar.x : player.x;
-  const tz = playerCar ? playerCar.z : player.z;
+  // Where this car hunts: the player while it can see him, the last place he
+  // was seen while that is fresh, the player again when there is no trail at
+  // all (a fresh crime, no sighting yet) — the grid pursuit then drives at the
+  // crime scene, not at a ghost.
+  let tx = playerCar ? playerCar.x : player.x;
+  let tz = playerCar ? playerCar.z : player.z;
+  const police = state.police;
+  if (!canSee(city, car.x, car.z, player) && police.lastSeen && state.elapsed - police.lastSeenAt < POLICE.lastSeenAge) {
+    tx = police.lastSeen.x;
+    tz = police.lastSeen.z;
+  }
   const dx = tx - car.x;
   const dz = tz - car.z;
   const dist = Math.hypot(dx, dz) || 1;
@@ -349,31 +407,35 @@ export function stepPolice(state, dt, random) {
     police.heli = null;
   }
 
-  // Seen? Any police still up within sight range keeps the heat on; unseen, the timer runs.
-  // A cop on the ground cannot report anything.
+  // Seen? A cop only counts when he can actually see Rook: in range AND a
+  // clear line of sight — a building between them breaks it. The helicopter
+  // watches from the sky, so only the safehouse hides Rook from it. When seen,
+  // the last-seen position updates: that is where the hunt goes when the
+  // sightline breaks. A cop on the ground cannot report anything.
   let seen = false;
-  // The helicopter watches from the sky: within sight range horizontally, its
-  // searchlight is on Rook and the heat never decays — four stars is a manhunt.
-  if (police.heli) {
+  const hidingInside = !!state.safehouse && state.safehouse.inside;
+  if (police.heli && !hidingInside) {
     const hdx = police.heli.x - player.x;
     const hdz = police.heli.z - player.z;
     if (hdx * hdx + hdz * hdz < POLICE.sightRange * POLICE.sightRange) seen = true;
   }
-  for (const cop of police.footCops) {
-    if (cop.state === 'down') continue;
-    const dx = cop.x - player.x;
-    const dz = cop.z - player.z;
-    if (dx * dx + dz * dz < POLICE.sightRange * POLICE.sightRange) { seen = true; break; }
+  if (!seen) {
+    for (const cop of police.footCops) {
+      if (cop.state === 'down') continue;
+      if (canSee(city, cop.x, cop.z, player)) { seen = true; break; }
+    }
   }
   if (!seen) {
     for (const car of police.cars) {
-      const dx = car.x - player.x;
-      const dz = car.z - player.z;
-      if (dx * dx + dz * dz < POLICE.sightRange * POLICE.sightRange) { seen = true; break; }
+      if (canSee(city, car.x, car.z, player)) { seen = true; break; }
     }
   }
-  if (seen) police.unseenTimer = 0;
-  else {
+  police.spotted = seen;
+  if (seen) {
+    police.unseenTimer = 0;
+    police.lastSeen = { x: player.x, z: player.z };
+    police.lastSeenAt = state.elapsed;
+  } else {
     police.unseenTimer += dt;
     if (police.unseenTimer >= POLICE.decayDelay) {
       state.wanted -= 1;
@@ -393,12 +455,31 @@ export function stepPolice(state, dt, random) {
       }
       continue;
     }
-    let tx = player.x;
-    let tz = player.z;
+    // Where this cop runs to: the player while he can see him, the last place
+    // he was seen while that is fresh, nowhere once it goes stale — a cop who
+    // has lost the trail stands where he is instead of running at a ghost.
+    let tx;
+    let tz;
+    let hunting = false;
+    if (canSee(city, cop.x, cop.z, player)) {
+      tx = player.x;
+      tz = player.z;
+      hunting = true;
+    } else if (police.lastSeen && state.elapsed - police.lastSeenAt < POLICE.lastSeenAge) {
+      tx = police.lastSeen.x;
+      tz = police.lastSeen.z;
+      hunting = true;
+    }
+    if (!hunting) {
+      // Lost the trail: stand and look, don't run at a ghost.
+      cop.speed = 0;
+      cop.walkPhase += dt * 0.5;
+      continue;
+    }
     if (cop.detour > 0) {
       cop.detour -= dt;
-      const rx = -(player.z - cop.z) * cop.side;
-      const rz = (player.x - cop.x) * cop.side;
+      const rx = -(tz - cop.z) * cop.side;
+      const rz = (tx - cop.x) * cop.side;
       tx = cop.x + rx;
       tz = cop.z + rz;
     }

@@ -1,12 +1,14 @@
-// Combat: a punch and a pistol, and the enforcers who chase Rook during the getaway.
-// One job: who can be hit, what a hit does, and who is hunting the player. The
-// game-feel skill's recipe, in plain JS — a punch that lands freezes the world for
-// a beat (hit-stop, owned by main.js), knocks the target back, and shakes the camera;
-// a gunshot is a hit-scan along the camera's aim, with limited ammo so every round
-// counts. Enforcers are the game-ai skill's seek steering again: chase the player,
-// punch at arm's reach, get back up after a while unless the mission is over.
+// Combat: a punch and four guns, and the enforcers who chase Rook during the getaway
+// and the safehouse stand. One job: who can be hit, what a hit does, and who is
+// hunting the player. The game-feel skill's recipe, in plain JS — a punch that
+// lands freezes the world for a beat (hit-stop, owned by main.js), knocks the target
+// back, and shakes the camera; a gunshot is a hit-scan along the camera's aim, with
+// limited ammo so every round counts. Enforcers are the game-ai skill's seek steering
+// again: chase the player, punch at arm's reach, get back up after a while unless the
+// mission is over. The guns: the pistol cracks, the shotgun spreads, the SMG sprays
+// fast at close range, the rifle drops a man in one hit from across the plaza.
 
-import { COMBAT, ENFORCER } from './config.js';
+import { COMBAT, ENFORCER, WEAPONS } from './config.js';
 import { collidesWithCity } from './city.js';
 import { addWanted, damagePlayer } from './police.js';
 
@@ -23,7 +25,7 @@ function angleDelta(from, to) {
   return d;
 }
 
-/** Combat state: cooldowns, the pistol, the shotgun, the parcel, and the enforcers. */
+/** Combat state: cooldowns, the four guns, the parcel, and the enforcers. */
 export function createCombat() {
   return {
     punchCooldown: 0,
@@ -33,9 +35,13 @@ export function createCombat() {
     hasPistol: false,
     ammo: 0,
     pistol: null, // { x, z, taken } — the pickup, once the story leaves it out
-    weapon: 'pistol', // the gun in hand: 'pistol' or 'shotgun' (Q cycles, once both are owned)
+    weapon: 'pistol', // the gun in hand: 'pistol', 'shotgun', 'smg' or 'rifle' (Q cycles the owned ones)
     hasShotgun: false,
     shells: 0,
+    hasSmg: false,
+    smgAmmo: 0,
+    hasRifle: false,
+    rifleAmmo: 0,
     hasPackage: false,
     enforcers: [],
   };
@@ -77,6 +83,19 @@ export function spawnEnforcers(combat, city, player, count, random) {
   }
 }
 
+/**
+ * Spawn one wave of enforcers for the safehouse stand — appended, not reset:
+ * a wave only arrives when the last one is fully down, so the list holds one
+ * wave at a time and the renderer's pool of three never overflows.
+ */
+export function spawnEnforcerWave(combat, city, player, count, random) {
+  const base = combat.enforcers.length;
+  for (let i = 0; i < count; i += 1) {
+    const p = spawnPointNear(city, player, ENFORCER.spawnDistance, random);
+    combat.enforcers.push(makeEnforcer(p.x, p.z, base + i));
+  }
+}
+
 /** Every hostile in reach: foot cops still standing, and enforcers still up. */
 function hostiles(state) {
   const out = [];
@@ -110,10 +129,12 @@ function downTarget(target, state) {
     target.ref.state = 'down';
     target.ref.downTimer = COP_DOWN_SECONDS;
     addWanted(state, 1);
+    if (state.ledger) state.ledger.copsDowned += 1;
     return 'cop';
   }
   target.ref.state = 'down';
   target.ref.downTimer = ENFORCER.downTime;
+  if (state.ledger) state.ledger.enforcersDowned += 1;
   return 'enforcer';
 }
 
@@ -166,14 +187,23 @@ export function tryPunch(combat, state) {
  *
  * The shotgun is a different shot: one shell, a wide cone, every hostile inside
  * it takes pellets at once. Up close it drops a cop in one pull; at range the
- * pellets spread thin and it is a loud way to miss.
+ * pellets spread thin and it is a loud way to miss. The SMG sprays the same
+ * cone as the pistol but near-automatic; the rifle is one slow, hard, far shot.
  */
 export function tryFire(combat, state, camYaw) {
   if (state.inCar || combat.fireCooldown > 0) {
     return { fired: false, empty: false, hit: false, down: null, weapon: combat.weapon };
   }
-  const weapon = combat.weapon === 'shotgun' && combat.hasShotgun ? 'shotgun' : 'pistol';
+  const owned = {
+    pistol: combat.hasPistol,
+    shotgun: combat.hasShotgun,
+    smg: combat.hasSmg,
+    rifle: combat.hasRifle,
+  };
+  const weapon = owned[combat.weapon] ? combat.weapon : 'pistol';
   if (weapon === 'shotgun') return tryFireShotgun(combat, state, camYaw);
+  if (weapon === 'smg') return tryFireSmg(combat, state, camYaw);
+  if (weapon === 'rifle') return tryFireRifle(combat, state, camYaw);
   if (!combat.hasPistol) {
     return { fired: false, empty: false, hit: false, down: null, weapon: 'pistol' };
   }
@@ -184,6 +214,7 @@ export function tryFire(combat, state, camYaw) {
   combat.ammo -= 1;
   combat.fireCooldown = COMBAT.fireCooldown;
   combat.muzzle = MUZZLE_SECONDS;
+  if (state.ledger) state.ledger.shotsFired += 1;
   const dx = -Math.sin(camYaw);
   const dz = -Math.cos(camYaw);
   const player = state.player;
@@ -226,6 +257,7 @@ function tryFireShotgun(combat, state, camYaw) {
   combat.shells -= 1;
   combat.fireCooldown = COMBAT.shotgunCooldown;
   combat.muzzle = MUZZLE_SECONDS;
+  if (state.ledger) state.ledger.shotsFired += 1;
   const dx = -Math.sin(camYaw);
   const dz = -Math.cos(camYaw);
   const player = state.player;
@@ -254,13 +286,94 @@ function tryFireShotgun(combat, state, camYaw) {
 }
 
 /**
- * Q to switch guns, on foot only: cycles pistol <-> shotgun when both are owned.
- * Returns the gun now in hand, or null when there is nothing to switch to.
+ * The SMG's shot: the pistol's shape, near-automatic — one round, a slightly
+ * wider cone, and a cooldown short enough that holding G keeps it firing.
+ */
+function tryFireSmg(combat, state, camYaw) {
+  if (combat.smgAmmo <= 0) {
+    combat.fireCooldown = WEAPONS.smg.cooldown;
+    return { fired: false, empty: true, hit: false, down: null, weapon: 'smg' };
+  }
+  combat.smgAmmo -= 1;
+  combat.fireCooldown = WEAPONS.smg.cooldown;
+  combat.muzzle = MUZZLE_SECONDS;
+  if (state.ledger) state.ledger.shotsFired += 1;
+  const dx = -Math.sin(camYaw);
+  const dz = -Math.cos(camYaw);
+  const player = state.player;
+  player.heading = Math.atan2(dx, dz);
+  let best = null;
+  let bestD = WEAPONS.smg.range * WEAPONS.smg.range;
+  for (const target of hostiles(state)) {
+    const tx = target.x - player.x;
+    const tz = target.z - player.z;
+    const d2 = tx * tx + tz * tz;
+    if (d2 >= bestD) continue;
+    const d = Math.sqrt(d2) || 1;
+    const cos = (tx * dx + tz * dz) / d;
+    if (cos < Math.cos(WEAPONS.smg.arc)) continue;
+    bestD = d2;
+    best = target;
+  }
+  if (!best) return { fired: true, empty: false, hit: false, down: null, weapon: 'smg' };
+  best.ref.hp -= WEAPONS.smg.damage;
+  knockback(best.ref, state.player, COMBAT.punchKnockback * 0.5);
+  const down = downTarget(best, state);
+  return { fired: true, empty: false, hit: true, down, weapon: 'smg' };
+}
+
+/**
+ * The rifle's shot: one slow, hard, far round — the nearest hostile in a needle
+ * cone takes three damage, enough to drop a cop or an enforcer in one hit.
+ */
+function tryFireRifle(combat, state, camYaw) {
+  if (combat.rifleAmmo <= 0) {
+    combat.fireCooldown = WEAPONS.rifle.cooldown;
+    return { fired: false, empty: true, hit: false, down: null, weapon: 'rifle' };
+  }
+  combat.rifleAmmo -= 1;
+  combat.fireCooldown = WEAPONS.rifle.cooldown;
+  combat.muzzle = MUZZLE_SECONDS;
+  if (state.ledger) state.ledger.shotsFired += 1;
+  const dx = -Math.sin(camYaw);
+  const dz = -Math.cos(camYaw);
+  const player = state.player;
+  player.heading = Math.atan2(dx, dz);
+  let best = null;
+  let bestD = WEAPONS.rifle.range * WEAPONS.rifle.range;
+  for (const target of hostiles(state)) {
+    const tx = target.x - player.x;
+    const tz = target.z - player.z;
+    const d2 = tx * tx + tz * tz;
+    if (d2 >= bestD) continue;
+    const d = Math.sqrt(d2) || 1;
+    const cos = (tx * dx + tz * dz) / d;
+    if (cos < Math.cos(WEAPONS.rifle.arc)) continue;
+    bestD = d2;
+    best = target;
+  }
+  if (!best) return { fired: true, empty: false, hit: false, down: null, weapon: 'rifle' };
+  best.ref.hp -= WEAPONS.rifle.damage;
+  knockback(best.ref, state.player, COMBAT.punchKnockback);
+  const down = downTarget(best, state);
+  return { fired: true, empty: false, hit: true, down, weapon: 'rifle' };
+}
+
+/**
+ * Q to switch guns, on foot only: cycles pistol -> shotgun -> smg -> rifle
+ * among the guns Rook owns. Returns the gun now in hand, or null when there
+ * is nothing to switch to.
  */
 export function trySwitchWeapon(combat, state) {
   if (state.inCar) return null;
-  if (!combat.hasPistol || !combat.hasShotgun) return null;
-  combat.weapon = combat.weapon === 'shotgun' ? 'pistol' : 'shotgun';
+  const owned = [];
+  if (combat.hasPistol) owned.push('pistol');
+  if (combat.hasShotgun) owned.push('shotgun');
+  if (combat.hasSmg) owned.push('smg');
+  if (combat.hasRifle) owned.push('rifle');
+  if (owned.length < 2) return null;
+  const at = owned.indexOf(combat.weapon);
+  combat.weapon = owned[(at + 1) % owned.length];
   return combat.weapon;
 }
 

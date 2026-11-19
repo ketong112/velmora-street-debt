@@ -1,4 +1,4 @@
-// Missions: six jobs that pay Rook's $50,000 debt down, one at a time, in the
+// Missions: ten jobs that pay Rook's $50,000 debt down, one at a time, in the
 // threejs-gameplay-systems skill's shape — a design brief per job, a core-loop
 // contract (do the verb, under pressure, for a reward, with a cost for failing),
 // and an objective the HUD can always point at. A mission is one job with a kind,
@@ -6,7 +6,9 @@
 // and wanted level and flips the phase. The story arc: the Harbormaster's debt,
 // paid down job by job — drops first, then a parcel, then a getaway, a smuggling
 // run, a chop-shop steal, and one last haul under the heat. Debt arc: $50,000
-// → $41,000 after the first three jobs, → $20,000 when all six are done.
+// → $41,000 after the first three jobs, → $20,000 when the first six are done,
+// → $0 when all ten are done: the courier run, the harbor race, the safehouse
+// stand, and the final payment at the docks.
 //
 // Mission 1, "The First Drop": collect MISSION.firstTarget of drops, then return
 // to the plaza. While collecting, the objective is the nearest live drop; once the
@@ -22,8 +24,8 @@
 // the three stars that follow, then reach the hideout. The enforcers spawn when
 // the heat does, and give up when it is gone.
 
-import { COMBAT, ENFORCER, MISSION, MISSION2, MISSION3, MISSION4, MISSION5, MISSION6, RED_ZONES, WANTED } from './config.js';
-import { spawnEnforcers } from './combat.js';
+import { COMBAT, ENFORCER, MISSION, MISSION10, MISSION2, MISSION3, MISSION4, MISSION5, MISSION6, MISSION7, MISSION8, MISSION9, RED_ZONES, SAFEHOUSE, WANTED } from './config.js';
+import { spawnEnforcerWave, spawnEnforcers } from './combat.js';
 import { addWanted } from './police.js';
 
 /**
@@ -52,6 +54,8 @@ export const MISSION_PHASE_DELIVER = 'deliver';
 export const MISSION_PHASE_STEAL = 'steal';
 export const MISSION_PHASE_EVADE = 'evade';
 export const MISSION_PHASE_HIDEOUT = 'hideout';
+export const MISSION_PHASE_RACE = 'race';
+export const MISSION_PHASE_DEFEND = 'defend';
 
 /** The mission list. `started` flips once, when the job first becomes current. */
 export function createMissions() {
@@ -132,6 +136,58 @@ export function createMissions() {
         started: false,
         dropsAtStart: 0,
         intro: 'The Harbormaster is done waiting. Eight drops, two stars of heat on you from the first step, and then back to the plaza — finish this.',
+      },
+      {
+        id: 'the-courier-run',
+        label: 'The Courier Run',
+        kind: 'multidrop',
+        detail: 'Pick up three parcels, deliver all three across town before the timer ends',
+        payout: MISSION7.payout,
+        phase: MISSION_PHASE_PICKUP,
+        started: false,
+        pickup: null,
+        stops: null,
+        stopIndex: 0,
+        timer: 0,
+        timeLeft: 0,
+        intro: 'Three parcels, one clock, three doors across town. Pick them all up at once, then run the route — late means back to the pickup.',
+      },
+      {
+        id: 'the-harbor-race',
+        label: 'The Harbor Race',
+        kind: 'race',
+        detail: 'Hit four checkpoints in order, against the clock',
+        payout: MISSION8.payout,
+        phase: MISSION_PHASE_RACE,
+        started: false,
+        checkpoints: null,
+        checkpointIndex: 0,
+        timer: 0,
+        timeLeft: 0,
+        intro: 'A street race with no rules but the clock: four checkpoints, in order, faster than the timer. The Harbormaster is watching.',
+      },
+      {
+        id: 'the-safehouse-stand',
+        label: 'The Safehouse Stand',
+        kind: 'defend',
+        detail: 'Hold the safehouse against five waves of enforcers',
+        payout: MISSION9.payout,
+        phase: MISSION_PHASE_DEFEND,
+        started: false,
+        wavesCleared: 0,
+        intro: "They found your place. Five waves of the Harbormaster's men are coming for the door — hold the safehouse, put them all down.",
+      },
+      {
+        id: 'the-final-payment',
+        label: 'The Final Payment',
+        kind: 'payoff',
+        detail: 'Collect 10 drops under three stars of heat, then pay the Harbormaster at the docks',
+        payout: MISSION10.payout,
+        phase: MISSION_PHASE_COLLECT,
+        started: false,
+        dropsAtStart: 0,
+        docks: null,
+        intro: 'The last one. Ten drops with three stars on you from the first step, then carry the payoff to the Harbormaster at the docks — and the debt is done.',
       },
     ],
     index: 0,
@@ -235,6 +291,62 @@ function initMission(mission, state) {
     mission.dropsAtStart = state.dropsCollected;
     state.wanted = Math.max(state.wanted, 2);
     state.police.unseenTimer = 0;
+  } else if (mission.kind === 'multidrop') {
+    // The courier run: one pickup, three drop-offs in a row, one clock for the
+    // whole route — the timer is the full drive at a brisk pace plus a margin.
+    const pickup = farthestSpawnPoint(state, state.player.x, state.player.z);
+    mission.pickup = { x: pickup.x, z: pickup.z };
+    const stops = [];
+    let from = pickup;
+    for (let i = 0; i < MISSION7.stops; i += 1) {
+      const stop = farthestSpawnPointExcept(state, from.x, from.z, from);
+      stops.push({ x: stop.x, z: stop.z });
+      from = stop;
+    }
+    mission.stops = stops;
+    mission.stopIndex = 0;
+    let dist = Math.hypot(pickup.x - state.player.x, pickup.z - state.player.z);
+    let prev = pickup;
+    for (const stop of stops) {
+      dist += Math.hypot(stop.x - prev.x, stop.z - prev.z);
+      prev = stop;
+    }
+    mission.timer = Math.round(dist * MISSION7.timePerMetre + MISSION7.timeBase);
+    mission.timeLeft = mission.timer;
+  } else if (mission.kind === 'race') {
+    // The harbor race: four checkpoints, each the far end of town from the last,
+    // so the route zigzags across the city. The clock is the route at race pace.
+    const checkpoints = [];
+    let from = { x: state.player.x, z: state.player.z };
+    for (let i = 0; i < MISSION8.checkpoints; i += 1) {
+      const cp = farthestSpawnPointExcept(state, from.x, from.z, from);
+      checkpoints.push({ x: cp.x, z: cp.z });
+      from = cp;
+    }
+    mission.checkpoints = checkpoints;
+    mission.checkpointIndex = 0;
+    let dist = 0;
+    let prev = { x: state.player.x, z: state.player.z };
+    for (const cp of checkpoints) {
+      dist += Math.hypot(cp.x - prev.x, cp.z - prev.z);
+      prev = cp;
+    }
+    mission.timer = Math.round(dist * MISSION8.timePerMetre + MISSION8.timeBase);
+    mission.timeLeft = mission.timer;
+  } else if (mission.kind === 'defend') {
+    // The safehouse stand: the waves come to Rook's door. The first wave spawns
+    // on the first defend step, not here — initMission runs before the player is
+    // anywhere near the door, and a wave spawning across town would be wasted.
+    mission.wavesCleared = 0;
+  } else if (mission.kind === 'payoff') {
+    // The final payment starts hot: three stars on Rook from the first step, and
+    // the count starts from the drops he has already banked. The docks are the
+    // far end of town from where he stands.
+    mission.dropsAtStart = state.dropsCollected;
+    const docks = farthestSpawnPoint(state, state.player.x, state.player.z);
+    mission.docks = { x: docks.x, z: docks.z };
+    state.wanted = Math.max(state.wanted, 3);
+    state.police.unseenTimer = 0;
   }
 }
 
@@ -250,6 +362,8 @@ function near(x1, z1, x2, z2, radius) {
  * target is hit, 'package' when a parcel or the contraband is picked up, 'fail'
  * when a delivery timer runs out, 'evade' when the gold coupe is stolen,
  * 'hideout' when the heat is lost, 'steal' when the violet coupe is stolen,
+ * 'checkpoint' when a race checkpoint, a courier stop or a defend wave is
+ * cleared, 'docks' when the payoff drops are in and the docks are the goal,
  * 'done' when a job completes.
  */
 export function stepMission(missions, state, dt, random) {
@@ -413,6 +527,115 @@ export function stepMission(missions, state, dt, random) {
     }
     return null;
   }
+
+  if (mission.kind === 'multidrop') {
+    // The Courier Run: one pickup, three doors, one clock. Late means back to
+    // the pickup with the parcels — the clock restarts, the stops do not.
+    if (mission.phase === MISSION_PHASE_PICKUP) {
+      if (near(state.player.x, state.player.z, mission.pickup.x, mission.pickup.z, MISSION2.pickupRadius)) {
+        mission.phase = MISSION_PHASE_DELIVER;
+        mission.timeLeft = mission.timer;
+        state.combat.hasPackage = true;
+        return 'package';
+      }
+      return null;
+    }
+    if (mission.phase === MISSION_PHASE_DELIVER) {
+      mission.timeLeft -= dt;
+      if (mission.timeLeft <= 0) {
+        mission.phase = MISSION_PHASE_PICKUP;
+        mission.stopIndex = 0;
+        mission.timeLeft = mission.timer;
+        state.combat.hasPackage = false;
+        return 'fail';
+      }
+      const stop = mission.stops[mission.stopIndex];
+      if (stop && near(state.player.x, state.player.z, stop.x, stop.z, MISSION2.deliverRadius)) {
+        mission.stopIndex += 1;
+        if (mission.stopIndex >= mission.stops.length) {
+          mission.phase = MISSION_PHASE_DONE;
+          state.cash += MISSION7.payout;
+          state.combat.hasPackage = false;
+          missions.index += 1;
+          return 'done';
+        }
+        return 'checkpoint';
+      }
+    }
+    return null;
+  }
+
+  if (mission.kind === 'race') {
+    // The Harbor Race: four checkpoints in order, one clock. Late means the
+    // race restarts at the first checkpoint — the timer starts over at full.
+    mission.timeLeft -= dt;
+    if (mission.timeLeft <= 0) {
+      mission.checkpointIndex = 0;
+      mission.timeLeft = mission.timer;
+      return 'fail';
+    }
+    const cp = mission.checkpoints[mission.checkpointIndex];
+    if (cp && near(state.player.x, state.player.z, cp.x, cp.z, MISSION2.deliverRadius)) {
+      mission.checkpointIndex += 1;
+      if (mission.checkpointIndex >= mission.checkpoints.length) {
+        mission.phase = MISSION_PHASE_DONE;
+        state.cash += MISSION8.payout;
+        missions.index += 1;
+        return 'done';
+      }
+      return 'checkpoint';
+    }
+    return null;
+  }
+
+  if (mission.kind === 'defend') {
+    // The Safehouse Stand: waves of enforcers come for the door. A wave is
+    // cleared when every enforcer in it is down — the downed ones are cleared
+    // out and the next wave spawns. The next wave only spawns while Rook is
+    // near the safehouse: the job is the door, not the whole town.
+    const enforcers = state.combat.enforcers;
+    if (enforcers.length > 0 && enforcers.every((e) => e.state === 'down')) {
+      enforcers.length = 0;
+      mission.wavesCleared += 1;
+      if (mission.wavesCleared >= MISSION9.waves) {
+        mission.phase = MISSION_PHASE_DONE;
+        state.cash += MISSION9.payout;
+        missions.index += 1;
+        return 'done';
+      }
+      return 'checkpoint';
+    }
+    if (enforcers.length === 0 && mission.wavesCleared < MISSION9.waves) {
+      const dx = state.player.x - SAFEHOUSE.x;
+      const dz = state.player.z - SAFEHOUSE.z;
+      if (dx * dx + dz * dz < MISSION9.defendRadius * MISSION9.defendRadius) {
+        spawnEnforcerWave(state.combat, state.city, state.player, MISSION9.enforcersPerWave, random);
+      }
+    }
+    return null;
+  }
+
+  if (mission.kind === 'payoff') {
+    // The Final Payment: collect MISSION10.drops drops under the three stars the
+    // job opened with, then carry the payoff to the docks. No timer — the heat
+    // is the pressure. Done at the docks, the debt is gone.
+    if (mission.phase === MISSION_PHASE_COLLECT) {
+      if (state.dropsCollected - mission.dropsAtStart >= MISSION10.drops) {
+        mission.phase = MISSION_PHASE_DELIVER;
+        return 'docks';
+      }
+      return null;
+    }
+    if (mission.phase === MISSION_PHASE_DELIVER) {
+      if (mission.docks && near(state.player.x, state.player.z, mission.docks.x, mission.docks.z, MISSION2.deliverRadius)) {
+        mission.phase = MISSION_PHASE_DONE;
+        state.cash += MISSION10.payout;
+        missions.index += 1;
+        return 'done';
+      }
+    }
+    return null;
+  }
   return null;
 }
 
@@ -427,6 +650,11 @@ export function stepMission(missions, state, dt, random) {
 export function missionObjective(missions, state) {
   const mission = currentMission(missions);
   if (!mission) return null;
+  // A job that has not opened yet has no route: its pickup, checkpoints and
+  // docks are still null. The step that finishes one job advances the index to
+  // the next before initMission runs for it, so the objective for that step is
+  // nothing — the beacon appears when the job opens on the next step.
+  if (!mission.started) return null;
   if (mission.kind === 'collect') {
     if (mission.phase === MISSION_PHASE_COLLECT) {
       let nearest = null;
@@ -530,11 +758,83 @@ export function missionObjective(missions, state) {
     }
     return null;
   }
+  if (mission.kind === 'multidrop') {
+    if (mission.phase === MISSION_PHASE_PICKUP) {
+      return { x: mission.pickup.x, z: mission.pickup.z, label: 'Pick up the three parcels' };
+    }
+    if (mission.phase === MISSION_PHASE_DELIVER) {
+      const stop = mission.stops[mission.stopIndex];
+      if (!stop) return null;
+      return {
+        x: stop.x,
+        z: stop.z,
+        label: `Deliver parcel ${mission.stopIndex + 1}/${mission.stops.length} — ${Math.max(0, Math.ceil(mission.timeLeft))}s left`,
+      };
+    }
+    return null;
+  }
+  if (mission.kind === 'race') {
+    const cp = mission.checkpoints[mission.checkpointIndex];
+    if (!cp) return null;
+    return {
+      x: cp.x,
+      z: cp.z,
+      label: `Race checkpoint ${mission.checkpointIndex + 1}/${mission.checkpoints.length} — ${Math.max(0, Math.ceil(mission.timeLeft))}s left`,
+    };
+  }
+  if (mission.kind === 'defend') {
+    // The marker sits on the nearest enforcer still standing — the threat — or
+    // on the safehouse door while the next wave is on its way.
+    let nearest = null;
+    let nearestD = Infinity;
+    for (const e of state.combat.enforcers) {
+      if (e.state === 'down') continue;
+      const dx = e.x - state.player.x;
+      const dz = e.z - state.player.z;
+      const d = dx * dx + dz * dz;
+      if (d < nearestD) { nearestD = d; nearest = e; }
+    }
+    if (nearest) {
+      return { x: nearest.x, z: nearest.z, label: `Defend the safehouse — wave ${mission.wavesCleared + 1}/${MISSION9.waves}` };
+    }
+    return {
+      x: SAFEHOUSE.x,
+      z: SAFEHOUSE.z,
+      label: `Defend the safehouse — wave ${mission.wavesCleared + 1}/${MISSION9.waves}`,
+    };
+  }
+  if (mission.kind === 'payoff') {
+    if (mission.phase === MISSION_PHASE_COLLECT) {
+      const got = state.dropsCollected - mission.dropsAtStart;
+      let nearest = null;
+      let nearestD = Infinity;
+      for (const pickup of state.pickups) {
+        if (!pickup.active) continue;
+        const dx = pickup.x - state.player.x;
+        const dz = pickup.z - state.player.z;
+        const d = dx * dx + dz * dz;
+        if (d < nearestD) { nearestD = d; nearest = pickup; }
+      }
+      if (!nearest) return { x: state.player.x, z: state.player.z, label: `Collect ${MISSION10.drops} drops for the payoff — ${got} so far` };
+      return { x: nearest.x, z: nearest.z, label: `Collect ${MISSION10.drops} drops for the payoff — ${got} so far` };
+    }
+    if (mission.phase === MISSION_PHASE_DELIVER) {
+      return {
+        x: mission.docks.x,
+        z: mission.docks.z,
+        label: 'Carry the payoff to the docks — the debt ends here',
+      };
+    }
+    return null;
+  }
   return null;
 }
 
 /** The red zones, for the minimap: only drawn while a delivery is running. */
 export function redZonesActive(missions) {
   const mission = currentMission(missions);
-  return mission && mission.kind === 'delivery' && mission.phase === MISSION_PHASE_DELIVER ? RED_ZONES : null;
+  if (!mission) return null;
+  if (mission.kind === 'delivery' && mission.phase === MISSION_PHASE_DELIVER) return RED_ZONES;
+  if (mission.kind === 'multidrop' && mission.phase === MISSION_PHASE_DELIVER) return RED_ZONES;
+  return null;
 }

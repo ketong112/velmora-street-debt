@@ -3,10 +3,10 @@
 // there. The game moves between four screens: title, play, paused and busted. On the title
 // the camera drifts over the plaza while the city idles; in play Rook walks Port Velmora
 // collecting cash drops toward his debt — or drives a car he just stole, with the police
-// after him, and at four stars a helicopter circling overhead. Six missions pay the debt
-// down; between jobs he can tune the radio (R), buy medkits, armor and shells at the
-// shops (1-5), and switch between the pistol and the shotgun (Q). Busted ends the run
-// until Space starts it again.
+// after him, and at four stars a helicopter circling overhead. Ten missions pay the debt
+// down; between jobs he can rest and save at his safehouse, tune a car in the garage,
+// buy medkits, armor and shells at the shops (1-9), and switch between four guns (Q).
+// Busted ends the run until Space starts it again.
 //
 // ?seed=N fixes the city. ?shot=start|play|end (with &seed=N) stages that scene instead
 // of running the loop, paints it twice and sets window.__shotReady for a screenshot.
@@ -17,8 +17,11 @@ import {
   EVENT_COIN,
   EVENT_ENTER_CAR,
   EVENT_EXIT_CAR,
+  EVENT_GARAGE,
   EVENT_HEAT,
   EVENT_HIT_PED,
+  EVENT_MISSION_CHECKPOINT,
+  EVENT_MISSION_DOCKS,
   EVENT_MISSION_DONE,
   EVENT_MISSION_EVADE,
   EVENT_MISSION_FAIL,
@@ -30,6 +33,7 @@ import {
   EVENT_PISTOL,
   EVENT_PUNCH,
   EVENT_PUNCH_HIT,
+  EVENT_SAFEHOUSE,
   EVENT_SHOP,
   EVENT_SHOT,
   EVENT_SHOT_EMPTY,
@@ -54,6 +58,7 @@ import { createRenderer, SCREEN_PAUSED, SCREEN_PLAY, SCREEN_TITLE } from './rend
 import { createHud } from './hud.js';
 import { createAudio } from './audio.js';
 import { applySave, captureSave, clearSave, readSave, writeSave } from './save.js';
+import { debtLeft } from './ledger.js';
 import { stageShot } from './shots.js';
 
 /** The longest frame the loop catches up on; a longer stall (a hidden tab) is dropped, not replayed. */
@@ -150,7 +155,11 @@ function runGame() {
       return;
     }
     const done = save.missionsDone.length;
-    const jobs = ['The First Drop', 'The Midnight Parcel', 'The Getaway', 'The Long Haul', 'The Chop Shop', 'The Last Haul'];
+    const jobs = [
+      'The First Drop', 'The Midnight Parcel', 'The Getaway', 'The Long Haul',
+      'The Chop Shop', 'The Last Haul', 'The Courier Run', 'The Harbor Race',
+      'The Safehouse Stand', 'The Final Payment',
+    ];
     const job = done < jobs.length ? jobs[done] : 'all jobs done';
     continueButton.textContent = `Continue — $${save.cash.toLocaleString('en-US')} banked · next: ${job}`;
     continueButton.classList.remove('hidden');
@@ -192,7 +201,7 @@ function runGame() {
     screen = SCREEN_PLAY;
     showOnly(screen);
     audio.musicStart();
-    hud.toast(`Welcome back — debt $${(STORY.debt - world.state.cash).toLocaleString('en-US')} left.`, 4);
+    hud.toast(`Welcome back — debt $${debtLeft(world.state.ledger).toLocaleString('en-US')} left.`, 4);
     announce('Playing. Save loaded.');
   }
 
@@ -240,7 +249,12 @@ function runGame() {
       if (readSave()) continueGame();
       else startGame();
     }
-    else if (actions & ACTION_PAUSE && screen === SCREEN_PLAY) pauseGame();
+    // P or Esc with the garage menu open — or resting inside the safehouse —
+    // shuts the menu or steps back out, instead of pausing. Everywhere else it pauses.
+    else if (actions & ACTION_PAUSE && screen === SCREEN_PLAY) {
+      if (world.state.garage.open || world.state.safehouse.inside) enterPressed = true;
+      else pauseGame();
+    }
     else if (actions & (ACTION_PAUSE | ACTION_CONFIRM) && screen === SCREEN_PAUSED) resumeGame();
     if (input.takeLockLost() && screen === SCREEN_PLAY) pauseGame();
   }
@@ -300,24 +314,38 @@ function runGame() {
       // A whiff: the arm still went out, nothing connected. No toast — it is every-day.
     }
     if (events & EVENT_SHOT_HIT) {
-      // The shotgun booms, the pistol cracks: the sound follows the gun that fired.
-      if (world.state.lastShotWeapon === 'shotgun') audio.boom();
-      else audio.shot();
+      // The sound follows the gun that fired: fire() picks the weapon's voice.
+      audio.fire(world.state.lastShotWeapon);
       hud.toast('Hit!', 2);
     } else if (events & EVENT_SHOT) {
-      if (world.state.lastShotWeapon === 'shotgun') audio.boom();
-      else audio.shot();
+      audio.fire(world.state.lastShotWeapon);
     } else if (events & EVENT_SHOT_EMPTY) {
       audio.click();
       hud.toast(
         world.state.lastShotWeapon === 'shotgun'
           ? 'Out of shells — buy more at Iron & Ammo.'
-          : 'Out of ammo — the pistol is dry.',
+          : world.state.lastShotWeapon === 'smg'
+            ? 'SMG dry — buy more rounds at Iron & Ammo.'
+            : world.state.lastShotWeapon === 'rifle'
+              ? 'Rifle dry — buy more rounds at Iron & Ammo.'
+              : 'Out of ammo — the pistol is dry.',
         3,
       );
     }
     if (events & EVENT_SHOP) {
       if (world.state.shopNotice) hud.toast(world.state.shopNotice, 3);
+    }
+    if (events & EVENT_SAFEHOUSE) {
+      // Stepping inside autosaves — the safehouse is a safe boundary, like a
+      // finished mission — and the toast says what happened at the door.
+      if (world.state.safehouse.inside) {
+        writeSave(captureSave(world.state, best));
+        refreshContinue();
+      }
+      if (world.state.safehouseNotice) hud.toast(world.state.safehouseNotice, 3);
+    }
+    if (events & EVENT_GARAGE) {
+      if (world.state.garageNotice) hud.toast(world.state.garageNotice, 3);
     }
     if (events & EVENT_WEAPON) {
       if (world.state.weaponNotice) hud.toast(world.state.weaponNotice, 2);
@@ -353,16 +381,30 @@ function runGame() {
       if (mission && mission.kind === 'smuggle') {
         hud.toast('Contraband secured — run it across town, fast! The docks noticed you. ★', 5);
         announce('Contraband picked up. Deliver it before the timer ends.');
+      } else if (mission && mission.kind === 'multidrop') {
+        hud.toast(`Parcel secured — ${mission.stops.length} doors to go, one clock!`, 5);
+        announce('Parcel picked up. Deliver it to every door before the timer ends.');
       } else {
         hud.toast('Parcel secured — drive it across town, fast!', 5);
         announce('Parcel picked up. Deliver it before the timer ends.');
       }
+    }
+    if (events & EVENT_MISSION_CHECKPOINT) {
+      if (world.state.checkpointNotice) hud.toast(world.state.checkpointNotice, 4);
+    }
+    if (events & EVENT_MISSION_DOCKS) {
+      if (world.state.checkpointNotice) hud.toast(world.state.checkpointNotice, 5);
+      announce('Payoff ready. Carry it to the docks.');
     }
     if (events & EVENT_MISSION_FAIL) {
       const mission = world.state.missions.list[world.state.missions.index];
       audio.fail();
       if (mission && mission.kind === 'smuggle') {
         hud.toast('Too slow — the contraband missed its buyer. Try again.', 5);
+      } else if (mission && mission.kind === 'race') {
+        hud.toast('Too slow — the race clock ran out. Back to checkpoint 1.', 5);
+      } else if (mission && mission.kind === 'multidrop') {
+        hud.toast('Too slow — the route missed its window. Back to the pickup.', 5);
       } else {
         hud.toast('Too slow — the parcel missed its window. Try again.', 5);
       }
@@ -384,8 +426,15 @@ function runGame() {
       const done = world.state.missions.list[world.state.missions.index - 1];
       const payout = done && done.payout ? ` +$${done.payout.toLocaleString('en-US')}` : '';
       audio.fanfare();
-      hud.toast(`Mission complete: ${done ? done.label : 'done'}!${payout}`, 5);
-      announce('Mission complete.');
+      // The tenth job clears the debt: the toast says so, plainly.
+      const allDone = world.state.missions.index >= world.state.missions.list.length;
+      hud.toast(
+        allDone
+          ? `DEBT PAID — Rook is free! ${done ? done.label : 'The Final Payment'} done.`
+          : `Mission complete: ${done ? done.label : 'done'}!${payout}`,
+        5,
+      );
+      announce(allDone ? 'Debt paid. Rook is free.' : 'Mission complete.');
       // Autosave on a safe boundary: the job is done, the state is consistent.
       if (world.state.cash > best) {
         best = world.state.cash;

@@ -4,11 +4,29 @@
 // volumes; decibels at the edges; headroom on the master; a little random wobble on
 // repeated sounds so they never sound robotic. Nothing plays before the first user
 // gesture (the browser will not allow it), and every call is a safe no-op until then.
+//
+// Each weapon has its own voice now, so the ear knows which gun fired without
+// looking: the pistol cracks, the SMG snaps thin and fast, the shotgun booms with
+// a pellet spread, and the rifle snaps supersonic and answers itself with an
+// echo off the buildings. main.js routes every shot through fire(weapon); shot()
+// and boom() stay as the pistol and shotgun voices for anything that still calls
+// them by the old names. The engine is three oscillators plus road noise that
+// only wakes above a third of top speed, and the siren is a true hi-lo two-tone,
+// not a wobble — a police car sounds like a police car.
 
 import { RADIO } from './config.js';
 
 // The master level, linear 0..1 — toDb at the edges turns it into decibels.
 const MASTER_LEVEL = 0.8;
+
+// The two siren tones, and how long each one sounds before the other takes over.
+const SIREN_HI = 950;
+const SIREN_LO = 720;
+const SIREN_FLIP_MS = 450;
+
+// Road noise only wakes above this much of top speed, then ramps to full.
+const ROAD_NOISE_FROM = 0.35;
+const ROAD_NOISE_MAX = 0.05;
 
 /** Linear 0..1 to decibels, the way ears hear it. */
 function toDb(linear) {
@@ -75,7 +93,8 @@ export function createAudio() {
 
   /**
    * A one-shot oscillator with an attack/decay envelope, freed when it ends.
-   * `delay` starts it later (for two-note sounds), `slideTo` bends its pitch.
+   * `delay` starts it later (for two-note sounds and echoes), `slideTo` bends
+   * its pitch down (or up) across the note.
    */
   function tone(freq, dur, type, vol, bus, slideTo, delay = 0) {
     if (!ctx) return;
@@ -94,9 +113,14 @@ export function createAudio() {
     osc.stop(t0 + dur + 0.05);
   }
 
-  /** A one-shot burst of filtered noise, freed when it ends. */
-  function noise(dur, vol, filterFreq, filterType, q) {
+  /**
+   * A one-shot burst of filtered noise, freed when it ends. `delay` starts it
+   * later — the shotgun's pellet spread and the rifle's echo are just delayed
+   * bursts of the same helper. `bus` is the sfx bus unless the caller says otherwise.
+   */
+  function noise(dur, vol, filterFreq, filterType, q, delay = 0, bus = sfxBus) {
     if (!ctx) return;
+    const t0 = ctx.currentTime + delay;
     const src = ctx.createBufferSource();
     src.buffer = noiseBuffer;
     src.loop = true;
@@ -105,13 +129,13 @@ export function createAudio() {
     filter.frequency.value = filterFreq;
     filter.Q.value = q ?? 1;
     const gain = ctx.createGain();
-    gain.gain.setValueAtTime(vol, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + dur);
+    gain.gain.setValueAtTime(vol, t0);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
     src.connect(filter);
     filter.connect(gain);
-    gain.connect(sfxBus);
-    src.start();
-    src.stop(ctx.currentTime + dur + 0.05);
+    gain.connect(bus);
+    src.start(t0);
+    src.stop(t0 + dur + 0.05);
   }
 
   /** One chord of the current station: its notes, its wave, its pace. */
@@ -153,6 +177,126 @@ export function createAudio() {
     playChord(0);
   }
 
+  /** The pistol: one sharp crack — a bandpass noise burst with a square click under it. */
+  function pistolShot() {
+    if (!ctx) return;
+    noise(0.09, 0.55, 1800, 'bandpass', 0.8);
+    tone(220, 0.06, 'square', 0.2, sfxBus, 60);
+  }
+
+  /**
+   * The SMG: a thinner, faster snap than the pistol — higher filter, shorter
+   * burst, less low end, and a faint metallic ping on top. It fires at 0.12 s
+   * intervals, so the sound stays light enough to overlap itself without mud.
+   */
+  function smgShot() {
+    if (!ctx) return;
+    noise(0.06, 0.42, 2400, 'bandpass', 1.2);
+    tone(300, 0.04, 'square', 0.14, sfxBus, 90);
+    tone(1400, 0.05, 'triangle', 0.06, sfxBus);
+  }
+
+  /**
+   * The shotgun: a deep low boom under a noise crack, then the pellet spread —
+   * two more bursts staggered a few hundredths apart, so the blast has width.
+   * The loudest gun in the game, and the slowest to pump.
+   */
+  function shotgunBlast() {
+    if (!ctx) return;
+    noise(0.28, 0.7, 500, 'lowpass');
+    tone(110, 0.22, 'sine', 0.55, sfxBus, 40);
+    noise(0.07, 0.5, 1800, 'bandpass', 0.8);
+    // The spread: pellets landing a fraction apart, each its own small burst.
+    noise(0.05, 0.3, 1400, 'bandpass', 1.0, 0.02);
+    noise(0.05, 0.22, 1100, 'bandpass', 1.0, 0.04);
+  }
+
+  /**
+   * The rifle: a supersonic snap — the highest, sharpest crack in the game —
+   * a deep thump under it, and then the sound coming back off the buildings:
+   * a first echo a beat later, a fainter one after that. Nothing else in the
+   * game answers itself, so a rifle shot is unmistakable at any distance.
+   */
+  function rifleShot() {
+    if (!ctx) return;
+    noise(0.05, 0.7, 3200, 'bandpass', 1.5);
+    tone(90, 0.18, 'sine', 0.5, sfxBus, 35);
+    // The echo off the towers: the same crack, quieter, twice.
+    noise(0.08, 0.25, 1800, 'bandpass', 0.8, 0.13);
+    noise(0.08, 0.12, 1200, 'bandpass', 0.8, 0.26);
+  }
+
+  /** Build the engine's voices once: two saws (one detuned, for chorus), a sub, and road noise. */
+  function buildEngine() {
+    const osc = ctx.createOscillator();
+    osc.type = 'sawtooth';
+    osc.frequency.value = 55;
+    const chorus = ctx.createOscillator();
+    chorus.type = 'sawtooth';
+    chorus.frequency.value = 55;
+    chorus.detune.value = 8; // a few cents apart: the two saws beat, like a real engine
+    const sub = ctx.createOscillator();
+    sub.type = 'sine';
+    sub.frequency.value = 28;
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = 500;
+    filter.Q.value = 1.2;
+    osc.connect(filter);
+    chorus.connect(filter);
+    sub.connect(filter);
+    filter.connect(engineBus);
+    osc.start();
+    chorus.start();
+    sub.start();
+    // Road noise: the same white noise, looped through a bandpass, its own gain
+    // so it can stay silent at low speed and wash in as the car gets fast.
+    const roadSrc = ctx.createBufferSource();
+    roadSrc.buffer = noiseBuffer;
+    roadSrc.loop = true;
+    const roadFilter = ctx.createBiquadFilter();
+    roadFilter.type = 'bandpass';
+    roadFilter.frequency.value = 700;
+    roadFilter.Q.value = 0.7;
+    const roadGain = ctx.createGain();
+    roadGain.gain.value = 0;
+    roadSrc.connect(roadFilter);
+    roadFilter.connect(roadGain);
+    roadGain.connect(engineBus);
+    roadSrc.start();
+    return { osc, chorus, sub, filter, roadGain };
+  }
+
+  /** Build the siren's two voices: a high and a low square wave, each with its own gain. */
+  function buildSiren() {
+    const hi = ctx.createOscillator();
+    hi.type = 'square';
+    hi.frequency.value = SIREN_HI;
+    const hiGain = ctx.createGain();
+    hiGain.gain.value = 0;
+    hi.connect(hiGain);
+    hiGain.connect(sfxBus);
+    hi.start();
+    const lo = ctx.createOscillator();
+    lo.type = 'square';
+    lo.frequency.value = SIREN_LO;
+    const loGain = ctx.createGain();
+    loGain.gain.value = 0;
+    lo.connect(loGain);
+    loGain.connect(sfxBus);
+    lo.start();
+    return { hiGain, loGain, timer: null, phase: false };
+  }
+
+  /** One siren flip: the high tone sounds, then the low one — hi-lo, hi-lo. */
+  function sirenFlip() {
+    if (!sirenNodes) return;
+    sirenNodes.phase = !sirenNodes.phase;
+    const t = ctx.currentTime;
+    sirenNodes.hiGain.gain.setTargetAtTime(sirenNodes.phase ? 0.04 : 0, t, 0.05);
+    sirenNodes.loGain.gain.setTargetAtTime(sirenNodes.phase ? 0 : 0.04, t, 0.05);
+  }
+
   return {
     unlock,
     isMuted() {
@@ -183,18 +327,33 @@ export function createAudio() {
       tone(140, 0.13, 'sine', 0.5, sfxBus, 45);
       noise(0.09, 0.3, 320, 'lowpass');
     },
-    /** A gunshot: a sharp noise crack with a low click under it. */
-    shot() {
+    /**
+     * Fire a named weapon — 'pistol', 'smg', 'shotgun' or 'rifle'. main.js calls
+     * this with the gun that fired, so the sound always follows the weapon.
+     * An unknown name falls back to the pistol crack rather than silence.
+     */
+    fire(weapon) {
       if (!ctx) return;
-      noise(0.09, 0.55, 1800, 'bandpass', 0.8);
-      tone(220, 0.06, 'square', 0.2, sfxBus, 60);
+      if (weapon === 'smg') smgShot();
+      else if (weapon === 'shotgun') shotgunBlast();
+      else if (weapon === 'rifle') rifleShot();
+      else pistolShot();
     },
-    /** A shotgun blast: a deep low boom under a noise crack — nothing like the pistol. */
+    /** The pistol's crack, on its own. */
+    pistolShot,
+    /** The SMG's thin fast snap, on its own. */
+    smgShot,
+    /** The shotgun's boom and pellet spread, on its own. */
+    shotgunBlast,
+    /** The rifle's supersonic snap and building echo, on its own. */
+    rifleShot,
+    /** The old name for the pistol crack — kept so older callers still sound right. */
+    shot() {
+      pistolShot();
+    },
+    /** The old name for the shotgun blast — kept so older callers still sound right. */
     boom() {
-      if (!ctx) return;
-      noise(0.28, 0.7, 500, 'lowpass');
-      tone(110, 0.22, 'sine', 0.55, sfxBus, 40);
-      noise(0.07, 0.5, 1800, 'bandpass', 0.8);
+      shotgunBlast();
     },
     /** The trigger on an empty magazine: a small dry click. */
     click() {
@@ -218,67 +377,55 @@ export function createAudio() {
       tone(311, 0.3, 'triangle', 0.16, sfxBus, 233);
     },
     /**
-     * The engine hum: a sawtooth whose pitch and loudness follow the car's speed,
-     * through a low-pass that opens as it revs. speed01 is 0..1; 0 silences it.
+     * The engine hum: two saws (one detuned, for chorus) plus a sub, whose pitch
+     * and loudness follow the car's speed, through a low-pass that opens as it
+     * revs — and road noise washing in above a third of top speed. speed01 is
+     * 0..1; 0 silences it. The oscillators keep running silently when the car
+     * stops: stopping and restarting them on every enter/exit would click, and
+     * a silent oscillator costs nothing.
      */
     engineSet(speed01, inCar) {
       if (!ctx) return;
       if (!inCar || speed01 <= 0.01) {
-        // The oscillators keep running silently: stopping and restarting them on
-        // every enter/exit would click, and a silent oscillator costs nothing.
-        if (engineNodes) engineBus.gain.setTargetAtTime(0, ctx.currentTime, 0.1);
+        if (engineNodes) {
+          engineBus.gain.setTargetAtTime(0, ctx.currentTime, 0.1);
+          engineNodes.roadGain.gain.setTargetAtTime(0, ctx.currentTime, 0.1);
+        }
         return;
       }
-      if (!engineNodes) {
-        const osc = ctx.createOscillator();
-        osc.type = 'sawtooth';
-        osc.frequency.value = 55;
-        const sub = ctx.createOscillator();
-        sub.type = 'sine';
-        sub.frequency.value = 28;
-        const filter = ctx.createBiquadFilter();
-        filter.type = 'lowpass';
-        filter.frequency.value = 500;
-        filter.Q.value = 1.2;
-        osc.connect(filter);
-        sub.connect(filter);
-        filter.connect(engineBus);
-        osc.start();
-        sub.start();
-        engineNodes = { osc, sub, filter };
-      }
+      if (!engineNodes) engineNodes = buildEngine();
       const t = ctx.currentTime;
       engineNodes.osc.frequency.setTargetAtTime(55 + 70 * speed01, t, 0.08);
+      engineNodes.chorus.frequency.setTargetAtTime(55 + 75 * speed01, t, 0.08);
       engineNodes.sub.frequency.setTargetAtTime(28 + 30 * speed01, t, 0.08);
       engineNodes.filter.frequency.setTargetAtTime(400 + 900 * speed01, t, 0.08);
       engineBus.gain.setTargetAtTime(0.05 + 0.07 * speed01, t, 0.08);
+      const road = Math.max(0, (speed01 - ROAD_NOISE_FROM) / (1 - ROAD_NOISE_FROM));
+      engineNodes.roadGain.gain.setTargetAtTime(ROAD_NOISE_MAX * road, t, 0.15);
     },
     /**
-     * The siren: a square wave wailing between two tones on a slow LFO, audible
-     * only while the wanted level is above zero.
+     * The siren: a true hi-lo two-tone — the high square sounds, then the low
+     * one, flipping every SIREN_FLIP_MS. Audible only while the wanted level is
+     * above zero; off means both tones silent and the flip timer stopped.
      */
     sirenSet(on) {
       if (!ctx) return;
-      if (!sirenNodes) {
-        const osc = ctx.createOscillator();
-        osc.type = 'square';
-        osc.frequency.value = 850;
-        const lfo = ctx.createOscillator();
-        lfo.type = 'sine';
-        lfo.frequency.value = 0.6;
-        const lfoGain = ctx.createGain();
-        lfoGain.gain.value = 150;
-        lfo.connect(lfoGain);
-        lfoGain.connect(osc.frequency);
-        const gain = ctx.createGain();
-        gain.gain.value = 0;
-        osc.connect(gain);
-        gain.connect(sfxBus);
-        osc.start();
-        lfo.start();
-        sirenNodes = { gain };
+      if (!sirenNodes) sirenNodes = buildSiren();
+      if (on) {
+        if (sirenNodes.timer === null) {
+          sirenNodes.phase = false;
+          sirenFlip();
+          sirenNodes.timer = window.setInterval(sirenFlip, SIREN_FLIP_MS);
+        }
+      } else {
+        if (sirenNodes.timer !== null) {
+          window.clearInterval(sirenNodes.timer);
+          sirenNodes.timer = null;
+        }
+        const t = ctx.currentTime;
+        sirenNodes.hiGain.gain.setTargetAtTime(0, t, 0.2);
+        sirenNodes.loGain.gain.setTargetAtTime(0, t, 0.2);
       }
-      sirenNodes.gain.gain.setTargetAtTime(on ? 0.045 : 0, ctx.currentTime, 0.2);
     },
     /** The radio loop: the current station's chords, one at a time. On the title
      * screen it is the title music; in play it is the car radio. R cycles stations. */
@@ -292,9 +439,16 @@ export function createAudio() {
         musicTimer = null;
       }
     },
-    /** R cycles the station and restarts the loop on it. Returns the new index. */
+    /**
+     * R cycles the station and restarts the loop on it. A short tuning blip
+     * marks the switch, so the ear hears the dial move. Returns the new index.
+     */
     radioNext() {
       station = (station + 1) % RADIO.length;
+      if (ctx) {
+        tone(1250, 0.05, 'triangle', 0.08, sfxBus);
+        tone(900, 0.05, 'triangle', 0.06, sfxBus, undefined, 0.06);
+      }
       if (musicTimer !== null) restartMusic();
       return station;
     },

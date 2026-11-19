@@ -59,6 +59,10 @@ export function createCity(random) {
         const w = 12 + random() * 16;
         const d = 12 + random() * 16;
         const margin = (blockSize - Math.max(w, d)) / 2 - 1;
+        // The margin keeps every building at least 1 m inside its block, so the
+        // streets — and the corners where they cross — stay open road. The safehouse
+        // door stands on the (-25, 75) corner, and it stays reachable because no
+        // building can ever cover it.
         const ox = (random() * 2 - 1) * Math.max(0, margin);
         const oz = (random() * 2 - 1) * Math.max(0, margin);
         const h = Math.round(

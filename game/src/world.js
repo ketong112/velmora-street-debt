@@ -1,12 +1,14 @@
 // The game's rules and state, with no drawing and no browser in it: Rook on foot or
 // behind the wheel in Port Velmora, WASD movement relative to the camera, collision
 // against the city, cash drops to collect, traffic and pedestrians, police and a wanted
-// level, and the mission framework. step() advances one fixed step and returns what
-// happened as bit flags, so the caller can react without the world knowing about
+// level, and the mission framework. Ten missions pay the debt down; between jobs Rook
+// can buy and rest at his safehouse, tune a car in the garage bay, and keep a ledger
+// of everything he earned, spent and owns. step() advances one fixed step and returns
+// what happened as bit flags, so the caller can react without the world knowing about
 // screens or sound. Nothing here allocates after createWorld returns, except one
 // scratch list of cars refilled each step.
 
-import { CAR, CITY, MISSION2, PICKUP, PLAYER, RED_ZONES, STORY, WANTED } from './config.js';
+import { CAR, CITY, GARAGE, MISSION2, MISSION9, PICKUP, PLAYER, RED_ZONES, STORY, WANTED } from './config.js';
 import { collidesWithCity, createCity } from './city.js';
 import { createParkedCars, nearestParkedCar, resolveCarCollision, stepCar } from './cars.js';
 import { createTraffic, stepTraffic } from './traffic.js';
@@ -23,6 +25,9 @@ import {
   trySwitchWeapon,
 } from './combat.js';
 import { buyItem, createShops, nearestShop } from './shops.js';
+import { createLedger } from './ledger.js';
+import { createSafehouse, nearSafehouse, stepSafehouse, useSafehouse } from './safehouse.js';
+import { buyUpgrade, carInBay, closeGarage, createGarage, nearestBayCar, openGarage } from './garage.js';
 
 export const EVENT_COIN = 1;
 export const EVENT_HIT = 2;
@@ -49,6 +54,10 @@ export const EVENT_MISSION_HIDEOUT = 2097152;
 export const EVENT_MISSION_STEAL = 4194304;
 export const EVENT_SHOP = 8388608;
 export const EVENT_WEAPON = 16777216;
+export const EVENT_SAFEHOUSE = 33554432;
+export const EVENT_GARAGE = 67108864;
+export const EVENT_MISSION_CHECKPOINT = 134217728;
+export const EVENT_MISSION_DOCKS = 268435456;
 
 const TWO_PI = Math.PI * 2;
 
@@ -100,9 +109,15 @@ export function createWorld(random) {
     missions: createMissions(),
     combat: createCombat(),
     shops: createShops(),
+    safehouse: createSafehouse(),
+    garage: createGarage(),
+    ledger: createLedger(),
     radioStation: 0, // the radio station, 0..RADIO.length-1; R cycles it (main.js)
     shopNotice: '', // the last shop result line, for the toast main.js shows
     weaponNotice: '', // the last weapon-switch line, for the toast main.js shows
+    safehouseNotice: '', // the last safehouse result line, for the toast main.js shows
+    garageNotice: '', // the last garage result line, for the toast main.js shows
+    checkpointNotice: '', // the last checkpoint/wave line, for the toast main.js shows
     lastShotWeapon: 'pistol', // the gun the last shot came from, for the sound
     currentCar: null,
     inCar: false,
@@ -164,8 +179,14 @@ export function createWorld(random) {
     state.police = createPolice();
     state.missions = createMissions();
     state.combat = createCombat();
+    state.safehouse = createSafehouse();
+    state.garage = createGarage();
+    state.ledger = createLedger();
     state.shopNotice = '';
     state.weaponNotice = '';
+    state.safehouseNotice = '';
+    state.garageNotice = '';
+    state.checkpointNotice = '';
     state.lastShotWeapon = 'pistol';
     state.currentCar = null;
     state.inCar = false;
@@ -222,8 +243,48 @@ export function createWorld(random) {
     }
   }
 
-  /** E to get in or out of a car. Stealing a parked car the player does not own is a crime. */
+  /**
+   * E: the one context key. With the garage menu open it shuts it; inside the
+   * safehouse it steps back out. On foot at the safehouse door it buys the place
+   * or steps inside; on foot at the garage door it opens the menu for the car in
+   * the bay; behind the wheel in the bay it opens the menu for this car. Only
+   * when none of those apply does it get in or out of a car. Stealing a parked
+   * car the player does not own is a crime — and the ledger counts the car.
+   */
   function enterExitCar() {
+    if (state.garage.open) {
+      const result = closeGarage(state);
+      state.garageNotice = result.text;
+      return EVENT_GARAGE;
+    }
+    if (state.safehouse.inside) {
+      const result = useSafehouse(state);
+      state.safehouseNotice = result.text;
+      return EVENT_SAFEHOUSE;
+    }
+    if (!state.inCar) {
+      if (nearSafehouse(state.safehouse, player.x, player.z)) {
+        const result = useSafehouse(state);
+        state.safehouseNotice = result.text;
+        return EVENT_SAFEHOUSE;
+      }
+      const gdx = GARAGE.x - player.x;
+      const gdz = GARAGE.z - player.z;
+      if (gdx * gdx + gdz * gdz < GARAGE.doorRadius * GARAGE.doorRadius) {
+        const car = nearestBayCar(state.cars);
+        if (!car) {
+          state.garageNotice = 'No car in the bay — park one there first.';
+          return EVENT_GARAGE;
+        }
+        const result = openGarage(state, car);
+        state.garageNotice = result.text;
+        return EVENT_GARAGE;
+      }
+    } else if (carInBay(state.currentCar)) {
+      const result = openGarage(state, state.currentCar);
+      state.garageNotice = result.text;
+      return EVENT_GARAGE;
+    }
     if (state.inCar) {
       const car = state.currentCar;
       // Step out on the driver's side, clear of the car itself.
@@ -249,6 +310,7 @@ export function createWorld(random) {
     let events = EVENT_ENTER_CAR;
     if (!car.stolen) {
       car.stolen = true;
+      state.ledger.carsStolen += 1;
       addWanted(state, WANTED.steal);
       events |= EVENT_STEAL;
     }
@@ -288,6 +350,22 @@ export function createWorld(random) {
 
     if (opts && opts.enter) events |= enterExitCar();
 
+    // The garage menu freezes the world: digits buy tunes, nothing else moves.
+    if (state.garage.open) {
+      if (opts && opts.buy) {
+        const result = buyUpgrade(state, String(opts.buy));
+        state.garageNotice = result.text;
+        events |= EVENT_GARAGE;
+      }
+      return events;
+    }
+    // Resting inside the safehouse: health returns, the heat decays, nothing
+    // else moves — the police cannot see through the walls.
+    if (state.safehouse.inside) {
+      stepSafehouse(state, dt);
+      return events;
+    }
+
     // F to punch, G to fire — on foot only, and only when the step asked for it.
     if (opts && opts.punch) {
       const punch = tryPunch(state.combat, state);
@@ -308,7 +386,11 @@ export function createWorld(random) {
       if (switched) {
         state.weaponNotice = switched === 'shotgun'
           ? 'Shotgun out — spread shot, slow pump, shells from Iron & Ammo.'
-          : 'Pistol out.';
+          : switched === 'smg'
+            ? 'SMG out — hold G and spray, mags from Iron & Ammo.'
+            : switched === 'rifle'
+              ? 'Rifle out — one hard shot from across the plaza, rounds from Iron & Ammo.'
+              : 'Pistol out.';
         events |= EVENT_WEAPON;
       }
     }
@@ -383,6 +465,10 @@ export function createWorld(random) {
         pickup.taken = state.elapsed;
         state.cash += PICKUP.value;
         state.dropsCollected += 1;
+        // The ledger counts the earning: the debt is paid by earning, not by
+        // holding cash — a medkit does not put the debt back up.
+        state.ledger.earned += PICKUP.value;
+        state.ledger.drops += 1;
         events |= EVENT_COIN;
       }
     }
@@ -392,19 +478,43 @@ export function createWorld(random) {
 
     const missionEvent = stepMission(state.missions, state, dt, random);
     if (missionEvent === 'return') events |= EVENT_MISSION_RETURN;
-    else if (missionEvent === 'done') events |= EVENT_MISSION_DONE;
+    else if (missionEvent === 'done') {
+      // The job's payout is earned, not just held: the ledger pays the debt down.
+      const done = state.missions.list[state.missions.index - 1];
+      if (done && done.payout) state.ledger.earned += done.payout;
+      state.ledger.missionsDone += 1;
+      events |= EVENT_MISSION_DONE;
+    }
     else if (missionEvent === 'start') events |= EVENT_MISSION_START;
     else if (missionEvent === 'fail') events |= EVENT_MISSION_FAIL;
     else if (missionEvent === 'package') events |= EVENT_MISSION_PACKAGE;
     else if (missionEvent === 'evade') events |= EVENT_MISSION_EVADE;
     else if (missionEvent === 'hideout') events |= EVENT_MISSION_HIDEOUT;
     else if (missionEvent === 'steal') events |= EVENT_MISSION_STEAL;
+    else if (missionEvent === 'checkpoint') {
+      // The checkpoint line depends on the job: a race checkpoint, a courier
+      // door, or a defend wave — the counts already moved when the step ran.
+      const mission = currentMission(state.missions);
+      if (mission && mission.kind === 'race') {
+        state.checkpointNotice = `Checkpoint ${mission.checkpointIndex}/${mission.checkpoints.length} — keep going!`;
+      } else if (mission && mission.kind === 'multidrop') {
+        state.checkpointNotice = `Parcel ${mission.stopIndex}/${mission.stops.length} delivered — next door!`;
+      } else if (mission && mission.kind === 'defend') {
+        state.checkpointNotice = `Wave ${mission.wavesCleared} cleared — ${MISSION9.waves - mission.wavesCleared} to go!`;
+      }
+      events |= EVENT_MISSION_CHECKPOINT;
+    }
+    else if (missionEvent === 'docks') {
+      state.checkpointNotice = 'Payoff ready — carry it to the docks!';
+      events |= EVENT_MISSION_DOCKS;
+    }
     state.objective = missionObjective(state.missions, state);
 
     // Speeding on a delivery draws the law — over the limit anywhere, twice as
-    // fast inside a red zone. One star per MISSION2.heatSeconds of it.
+    // fast inside a red zone. One star per MISSION2.heatSeconds of it. The
+    // courier run is a delivery too, so the same rule watches it.
     const mission = currentMission(state.missions);
-    if (mission && mission.kind === 'delivery' && mission.phase === 'deliver' && state.inCar && state.currentCar) {
+    if (mission && (mission.kind === 'delivery' || mission.kind === 'multidrop') && mission.phase === 'deliver' && state.inCar && state.currentCar) {
       const speed = Math.abs(state.currentCar.speed);
       const inRed = RED_ZONES.some((zone) => {
         const dx = player.x - zone.x;

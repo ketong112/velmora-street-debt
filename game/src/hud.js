@@ -3,9 +3,12 @@
 // value is written to the page only when it actually changes. The minimap is the one thing
 // redrawn every frame: a 180x180 canvas is cheap, and Rook never stops moving.
 
-import { CITY, COMBAT, PLAYER, RADIO, SHOP_ITEMS, STORY } from './config.js';
+import { CITY, COMBAT, GARAGE, PLAYER, RADIO, SAFEHOUSE, SHOP_ITEMS } from './config.js';
 import { currentMission, redZonesActive } from './missions.js';
 import { nearestShop } from './shops.js';
+import { debtLeft, ledgerLine, ledgerOwnsLine } from './ledger.js';
+import { garageMenu, garagePrompt } from './garage.js';
+import { safehousePrompt } from './safehouse.js';
 
 const MAP_SIZE = 180;
 
@@ -18,6 +21,7 @@ const FLASH_RATE = 3; // light-bar flips per second
 export function createHud() {
   const cashEl = document.getElementById('hud-cash');
   const debtEl = document.getElementById('hud-debt');
+  const ledgerEl = document.getElementById('hud-ledger');
   const healthFill = document.getElementById('hud-health-fill');
   const healthText = document.getElementById('hud-health-text');
   const starsEl = document.getElementById('hud-stars');
@@ -28,20 +32,29 @@ export function createHud() {
   const ammoEl = document.getElementById('hud-ammo');
   const radioEl = document.getElementById('hud-radio');
   const shopEl = document.getElementById('hud-shop');
+  const placeEl = document.getElementById('hud-place');
+  const garageEl = document.getElementById('hud-garage');
+  const safehouseEl = document.getElementById('hud-safehouse');
   const timerEl = document.getElementById('hud-timer');
   const map = document.getElementById('hud-minimap');
   const toastEl = document.getElementById('hud-toast');
   const mapCtx = map.getContext('2d');
 
   let lastCash = -1;
+  let lastDebt = -1;
+  let lastLedger = '';
   let lastHealth = -1;
   let lastArmor = -1;
   let lastWanted = -1;
+  let lastSpotted = null;
   let lastSpeed = -1;
   let lastObjective = '';
   let lastAmmo = '';
   let lastRadio = '';
   let lastShop = '';
+  let lastPlace = '';
+  let lastGarage = '';
+  let lastSafehouse = '';
   let lastTimer = '';
   let toastTimer = 0;
 
@@ -129,6 +142,27 @@ export function createHud() {
       const [x, z] = toMap(shop.x, shop.z);
       ctx.fillRect(x - 2.5, z - 2.5, 5, 5);
     }
+    // The safehouse as a green house (a square with a roof triangle), the garage
+    // as a blue square — the two places that are Rook's own, at a glance.
+    const [hx, hz] = toMap(SAFEHOUSE.x, SAFEHOUSE.z);
+    ctx.fillStyle = state.safehouse.owned ? '#37d67a' : '#2f8f5b';
+    ctx.fillRect(hx - 3, hz - 1, 6, 5);
+    ctx.beginPath();
+    ctx.moveTo(hx - 4, hz - 1);
+    ctx.lineTo(hx, hz - 5);
+    ctx.lineTo(hx + 4, hz - 1);
+    ctx.closePath();
+    ctx.fill();
+    const [gx, gz] = toMap(GARAGE.x, GARAGE.z);
+    ctx.fillStyle = '#3b82f6';
+    ctx.fillRect(gx - 3, gz - 3, 6, 6);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(gx - 1, gz - 1, 2, 2);
+    // The garage bay: a yellow outline on the street in front of the garage.
+    const [bx, bz] = toMap(GARAGE.bayX, GARAGE.bayZ);
+    ctx.strokeStyle = 'rgba(242, 201, 76, 0.8)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(bx - 4, bz - 3, 8, 6);
     // The mission objective as a gold diamond.
     if (state.objective) {
       const [x, z] = toMap(state.objective.x, state.objective.z);
@@ -195,7 +229,18 @@ export function createHud() {
       cashEl.classList.remove('bump');
       void cashEl.offsetWidth; // restart the bump animation
       cashEl.classList.add('bump');
-      debtEl.textContent = `Debt ${money(STORY.debt - state.cash)} left`;
+    }
+    // The debt is the ledger's, not the wallet's: spending on a medkit does not
+    // put the debt back up. It only moves when Rook earns.
+    const debt = debtLeft(state.ledger);
+    if (debt !== lastDebt) {
+      lastDebt = debt;
+      debtEl.textContent = debt > 0 ? `Debt ${money(debt)} left` : 'DEBT PAID — Rook is free!';
+    }
+    const ledger = ledgerLine(state.ledger);
+    if (ledger !== lastLedger) {
+      lastLedger = ledger;
+      ledgerEl.textContent = ledger;
     }
     const health = Math.round(state.player.health);
     const armor = Math.round(state.player.armor);
@@ -214,21 +259,35 @@ export function createHud() {
       starsEl.classList.toggle('hot', state.wanted > 0);
       sirenEl.classList.toggle('show', state.wanted > 0);
     }
-    // Speed: only behind the wheel, in km/h.
+    // Spotted or hidden: with heat on, the siren line says whether any cop can
+    // actually see Rook right now — hide behind a building and it says so.
+    const spotted = state.wanted > 0 && state.police.spotted;
+    if (spotted !== lastSpotted) {
+      lastSpotted = spotted;
+      sirenEl.textContent = spotted ? '🚨 POLICE ON YOU' : '🌫 HIDDEN — stay out of sight';
+    }
+    // Speed: only behind the wheel, in km/h — with the car's HP beside it, so
+    // a tuned car's extra armor reads at a glance.
     const speed = state.inCar && state.currentCar ? Math.round(Math.abs(state.currentCar.speed) * 3.6) : 0;
     if (speed !== lastSpeed) {
       lastSpeed = speed;
-      speedEl.textContent = state.inCar ? `${speed} km/h` : '';
+      speedEl.textContent = state.inCar && state.currentCar
+        ? `${speed} km/h · CAR ${Math.max(0, Math.round(state.currentCar.hp))} HP`
+        : '';
     }
-    // The guns: the one in hand, its rounds, and Q to switch when both are owned.
+    // The guns: the one in hand, its rounds, and Q to switch when more than one is owned.
     let ammo = '';
-    if (state.combat.hasPistol || state.combat.hasShotgun) {
-      const both = state.combat.hasPistol && state.combat.hasShotgun;
-      if (state.combat.weapon === 'shotgun' && state.combat.hasShotgun) {
-        ammo = `💥 Shotgun ${state.combat.shells} shells${both ? ' (Q)' : ''}`;
-      } else {
-        ammo = `🔫 Pistol ${state.combat.ammo} / ${COMBAT.pistolAmmo}${both ? ' (Q)' : ''}`;
-      }
+    const ownedCount = (state.combat.hasPistol ? 1 : 0) + (state.combat.hasShotgun ? 1 : 0)
+      + (state.combat.hasSmg ? 1 : 0) + (state.combat.hasRifle ? 1 : 0);
+    const qHint = ownedCount > 1 ? ' (Q)' : '';
+    if (state.combat.weapon === 'shotgun' && state.combat.hasShotgun) {
+      ammo = `💥 Shotgun ${state.combat.shells} shells${qHint}`;
+    } else if (state.combat.weapon === 'smg' && state.combat.hasSmg) {
+      ammo = `🔫 SMG ${state.combat.smgAmmo} rounds${qHint}`;
+    } else if (state.combat.weapon === 'rifle' && state.combat.hasRifle) {
+      ammo = `🎯 Rifle ${state.combat.rifleAmmo} rounds${qHint}`;
+    } else if (state.combat.hasPistol || state.combat.hasShotgun) {
+      ammo = `🔫 Pistol ${state.combat.ammo} / ${COMBAT.pistolAmmo}${qHint}`;
     }
     if (ammo !== lastAmmo) {
       lastAmmo = ammo;
@@ -242,7 +301,8 @@ export function createHud() {
     }
     // The shop shelf, while Rook stands at a shop on foot: the whole menu in one
     // line, so the digit to press is right there — 1 medkit, 2 armor, 3 ammo,
-    // 4 shotgun, 5 shells. Away from a shop the line is gone.
+    // 4 shotgun, 5 shells, 6 SMG, 7 SMG rounds, 8 rifle, 9 rifle rounds.
+    // Away from a shop the line is gone.
     const shop = !state.inCar ? nearestShop(state.shops, state.player.x, state.player.z) : null;
     const shopLine = shop
       ? `🏪 ${shop.name} — ${SHOP_ITEMS.map((item) => `[${item.key}] ${item.label} $${item.price}`).join(' · ')}`
@@ -252,10 +312,46 @@ export function createHud() {
       shopEl.textContent = shopLine;
       shopEl.classList.toggle('show', shopLine !== '');
     }
-    // The delivery timer: counts down while a parcel — or the contraband — is in
-    // hand, red under 10 seconds.
+    // The place prompt: the safehouse door or the garage door, on foot — the
+    // one line that says what E does here. The garage menu and the safehouse
+    // panel have their own panels, so the prompt hides while they are open.
+    const place = state.garage.open || state.safehouse.inside
+      ? ''
+      : safehousePrompt(state) || garagePrompt(state);
+    if (place !== lastPlace) {
+      lastPlace = place;
+      placeEl.textContent = place;
+      placeEl.classList.toggle('show', place !== '');
+    }
+    // The garage menu, while it is open: the car, its tunes, the prices, the keys.
+    // garageMenu returns the numbers; the HUD turns them into lines.
+    const menu = state.garage.open ? garageMenu(state) : null;
+    const garageLine = menu
+      ? `🔧 ${GARAGE.name} — Car ${menu.car.id} · top ${menu.maxSpeed} km/h · max ${menu.maxHp} HP\n`
+        + `[1] Engine Lv ${menu.engine}/3 ${menu.enginePrice ? `— $${menu.enginePrice.toLocaleString('en-US')}` : '— MAX'}`
+        + ` · [2] Armor Lv ${menu.armor}/3 ${menu.armorPrice ? `— $${menu.armorPrice.toLocaleString('en-US')}` : '— MAX'}`
+        + ` · [3] Paint — $${menu.paintPrice}\n[E] Close`
+      : '';
+    if (garageLine !== lastGarage) {
+      lastGarage = garageLine;
+      garageEl.textContent = garageLine;
+      garageEl.classList.toggle('show', garageLine !== '');
+    }
+    // The safehouse panel, while Rook rests inside: health coming back, the save
+    // that was written on the way in, and what the ledger says he owns.
+    const safehouseLine = state.safehouse.inside
+      ? `🏠 ${SAFEHOUSE.name} — resting, HP restoring… · game saved · [E] Step out\n${ledgerOwnsLine(state.ledger, state.safehouse.owned)}`
+      : '';
+    if (safehouseLine !== lastSafehouse) {
+      lastSafehouse = safehouseLine;
+      safehouseEl.textContent = safehouseLine;
+      safehouseEl.classList.toggle('show', safehouseLine !== '');
+    }
+    // The timer: counts down while a parcel — the contraband, the courier's
+    // doors, or the race's checkpoints — is in hand, red under 10 seconds.
     const mission = currentMission(state.missions);
-    const timer = mission && (mission.kind === 'delivery' || mission.kind === 'smuggle') && mission.phase === 'deliver'
+    const timer = mission && (mission.kind === 'delivery' || mission.kind === 'smuggle' || mission.kind === 'multidrop' || mission.kind === 'race')
+      && mission.phase === 'deliver'
       ? `⏱ ${Math.max(0, Math.ceil(mission.timeLeft))}s`
       : '';
     if (timer !== lastTimer) {
@@ -264,7 +360,7 @@ export function createHud() {
       timerEl.classList.toggle('show', timer !== '');
       timerEl.classList.toggle(
         'urgent',
-        mission !== null && (mission.kind === 'delivery' || mission.kind === 'smuggle') && mission.phase === 'deliver' && mission.timeLeft < 10,
+        mission !== null && (mission.kind === 'delivery' || mission.kind === 'smuggle' || mission.kind === 'multidrop' || mission.kind === 'race') && mission.phase === 'deliver' && mission.timeLeft < 10,
       );
     }
     // The objective line and its compass arrow: the arrow turns with the camera.

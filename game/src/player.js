@@ -108,6 +108,8 @@ export function updatePlayerMesh(mesh, player, dt, combat) {
   parts.armR.rotation.x = swing * 0.85;
   // A punch throws the right arm straight forward; a shot holds it out, aiming.
   // The pose is driven by the combat timers, so it always matches the real state.
+  // Every fire function in combat.js sets the muzzle timer, so the aim pose covers
+  // all four weapons — pistol, shotgun, SMG and rifle — not just the pistol.
   if (combat && combat.punchTimer > 0) {
     // The punch pose runs the same 0.25 s the punch timer does in combat.js:
     // keep the two in sync or the arm finishes before the swing does.
