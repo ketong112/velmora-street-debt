@@ -3,10 +3,16 @@
 // (cash, which jobs are done, the pistol, the best haul), never engine objects;
 // stamp a version on every save and validate on load, falling back to nothing
 // rather than a half-written save; autosave only on safe boundaries (a mission
-// completing), never mid-combat. localStorage writes are atomic per key, so a crash
-// leaves either the old save or the new one.
+// completing, stepping into the safehouse), never mid-combat. localStorage writes
+// are atomic per key, so a crash leaves either the old save or the new one.
+// Round 3 adds the ledger, the safehouse, the garage tuning and the two new
+// guns — every one of them defaults when the save predates it, so a round-2
+// save still loads clean.
 
 import { SAVE_KEY, SAVE_VERSION } from './config.js';
+import { captureGarage, readGarage, tunedMaxHp } from './garage.js';
+import { captureLedger, readLedger } from './ledger.js';
+import { captureSafehouse, readSafehouse } from './safehouse.js';
 
 /** Read the save, or null when there is none, it is newer than this build, or it fails validation. */
 export function readSave() {
@@ -39,8 +45,19 @@ export function readSave() {
     // to "never bought" rather than failing validation.
     hasShotgun: data.hasShotgun === true,
     shells: typeof data.shells === 'number' && Number.isFinite(data.shells) ? Math.max(0, Math.floor(data.shells)) : 0,
-    weapon: data.weapon === 'shotgun' ? 'shotgun' : 'pistol',
+    // The gun in hand: any of the four, or the pistol when the save says
+    // something else (a round-2 save only ever says 'shotgun' or 'pistol').
+    weapon: ['pistol', 'shotgun', 'smg', 'rifle'].includes(data.weapon) ? data.weapon : 'pistol',
     armor: typeof data.armor === 'number' && Number.isFinite(data.armor) ? Math.max(0, Math.floor(data.armor)) : 0,
+    // Round-3 fields: a save from round 2 has none of these, so each defaults
+    // to "never bought / never owned" rather than failing validation.
+    hasSmg: data.hasSmg === true,
+    smgAmmo: typeof data.smgAmmo === 'number' && Number.isFinite(data.smgAmmo) ? Math.max(0, Math.floor(data.smgAmmo)) : 0,
+    hasRifle: data.hasRifle === true,
+    rifleAmmo: typeof data.rifleAmmo === 'number' && Number.isFinite(data.rifleAmmo) ? Math.max(0, Math.floor(data.rifleAmmo)) : 0,
+    ledger: readLedger(data.ledger),
+    safehouse: readSafehouse(data.safehouse),
+    garage: readGarage(data.garage),
   };
 }
 
@@ -58,6 +75,13 @@ export function captureSave(state, best) {
     shells: state.combat.shells,
     weapon: state.combat.weapon,
     armor: state.player.armor,
+    hasSmg: state.combat.hasSmg,
+    smgAmmo: state.combat.smgAmmo,
+    hasRifle: state.combat.hasRifle,
+    rifleAmmo: state.combat.rifleAmmo,
+    ledger: captureLedger(state.ledger),
+    safehouse: captureSafehouse(state.safehouse),
+    garage: captureGarage(state.garage),
   };
 }
 
@@ -103,6 +127,27 @@ export function applySave(state, save) {
   state.combat.shells = save.shells;
   // The saved gun only loads if it is owned: a shotgun in the save without the
   // gun itself (a hand edit) falls back to the pistol.
-  state.combat.weapon = save.weapon === 'shotgun' && save.hasShotgun ? 'shotgun' : 'pistol';
+  const ownedGuns = [];
+  if (save.hasPistol) ownedGuns.push('pistol');
+  if (save.hasShotgun) ownedGuns.push('shotgun');
+  if (save.hasSmg) ownedGuns.push('smg');
+  if (save.hasRifle) ownedGuns.push('rifle');
+  state.combat.weapon = ownedGuns.includes(save.weapon) ? save.weapon : 'pistol';
+  state.combat.hasSmg = save.hasSmg;
+  state.combat.smgAmmo = save.smgAmmo;
+  state.combat.hasRifle = save.hasRifle;
+  state.combat.rifleAmmo = save.rifleAmmo;
   state.player.armor = save.armor;
+  // The ledger, the safehouse and the garage tuning come back whole — and the
+  // tuning is painted back onto the cars, so a tuned car is still tuned.
+  state.ledger = readLedger(save.ledger);
+  state.safehouse = readSafehouse(save.safehouse);
+  state.garage = readGarage(save.garage);
+  for (const car of state.cars) {
+    const tuning = state.garage.tuning[car.id];
+    if (!tuning) continue;
+    car.tuning = { engine: tuning.engine, armor: tuning.armor };
+    car.color = tuning.paint;
+    car.hp = tunedMaxHp(car);
+  }
 }

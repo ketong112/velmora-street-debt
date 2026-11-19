@@ -6,9 +6,9 @@
         "seed": 1
     },
     {
-        "description": "Combat on foot: Rook firing the shotgun, two enforcers closing in, a foot cop chasing from the plaza side.",
-        "name": "2-combat.jpg",
-        "query": "?shot=combat&seed=1",
+        "description": "Garage: Rook on foot beside the starter car in the bay, the garage menu open with an engine tune bought — the spoiler proves the tune, the blue diamond bobs over the Velmora Garage door.",
+        "name": "2-garage.jpg",
+        "query": "?shot=garage&seed=1",
         "seed": 1
     },
     {

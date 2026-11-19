@@ -7,6 +7,7 @@
 
 import { CAR, TRAFFIC } from './config.js';
 import { collidesWithCity } from './city.js';
+import { tunedAccel, tunedMaxHp, tunedMaxSpeed } from './garage.js';
 
 const TWO_PI = Math.PI * 2;
 
@@ -17,13 +18,20 @@ function angleDelta(from, to) {
   return d;
 }
 
-/** One parked car, undamaged and not yet stolen. */
+/** One parked car, undamaged and not yet stolen. `tuning` is what the garage
+ * fitted: engine and armor levels, both 0 until bought. */
 function makeParkedCar(x, z, heading, color, id) {
   return {
     kind: 'parked', x, z, heading, speed: 0, steer: 0,
     color, stolen: false, id,
     hp: CAR.maxHp, smoking: false,
+    tuning: { engine: 0, armor: 0 },
   };
+}
+
+/** The most HP this car holds, with its armor fitted: the garage's number. */
+export function carMaxHp(car) {
+  return tunedMaxHp(car);
 }
 
 /**
@@ -84,9 +92,14 @@ export function nearestParkedCar(cars, x, z) {
  * One fixed step of arcade driving. throttle: +1 gas, -1 brake/reverse; steerInput:
  * -1..1. Steering scales down with speed (fast cars turn less), the heading turns
  * by the bicycle rule (speed / wheelbase) * tan(steer), and drag bleeds speed when
- * the foot is off the pedal. Returns true when the car hit a building this step.
+ * the foot is off the pedal. A tuned engine pulls harder and tops out higher —
+ * the numbers come from the garage, so a stock car and a tuned one drive differently.
+ * Returns true when the car hit a building this step.
  */
 export function stepCar(car, throttle, steerInput, dt, city) {
+  const maxSpeed = tunedMaxSpeed(car);
+  const maxReverse = CAR.maxReverse;
+  const accel = tunedAccel(car);
   const steerMax = CAR.maxSteer / (1 + Math.abs(car.speed) * CAR.steerSpeedFalloff);
   const targetSteer = steerInput * steerMax;
   car.steer += (targetSteer - car.steer) * Math.min(1, CAR.grip * dt);
@@ -94,14 +107,14 @@ export function stepCar(car, throttle, steerInput, dt, city) {
   // A car at 0 HP is stalled: the pedal does nothing, drag bleeds what speed is left.
   if (car.hp !== undefined && car.hp <= 0) {
     car.speed -= car.speed * CAR.drag * dt;
-  } else if (throttle > 0) car.speed += CAR.accel * throttle * dt;
+  } else if (throttle > 0) car.speed += accel * throttle * dt;
   else if (throttle < 0) {
     if (car.speed > 0.5) car.speed += CAR.brake * throttle * dt; // braking
     else car.speed += CAR.reverseAccel * throttle * dt; // reversing
   }
   car.speed -= car.speed * CAR.drag * dt;
   if (Math.abs(car.speed) < 0.05 && throttle === 0) car.speed = 0;
-  car.speed = Math.max(-CAR.maxReverse, Math.min(CAR.maxSpeed, car.speed));
+  car.speed = Math.max(-maxReverse, Math.min(maxSpeed, car.speed));
 
   car.heading += (car.speed / CAR.wheelbase) * Math.tan(car.steer) * dt;
 

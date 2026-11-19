@@ -2,11 +2,13 @@
 // (Node 22, standard library only). Rook Marlowe owes the Harbormaster $50,000
 // and pays it down job by job in Port Velmora: collect the green cash drops,
 // steal cars, outrun the law — and at four stars a police helicopter circles
-// overhead with its searchlight on him. Six missions in all: the first drops,
+// overhead with its searchlight on him. Ten missions in all: the first drops,
 // a timed parcel, a getaway, a cross-town smuggling run, a chop-shop steal, and
-// one last haul under the heat. Between jobs he tunes three synthesized radio
-// stations (R), buys medkits, armor and shells at the shops (1-5), and switches
-// between the pistol and the shotgun (Q). The game lives in game/ beside this
+// one last haul under the heat — then a courier run, a harbor race, a safehouse
+// stand, and the final payment at the docks, which clears the debt. Between jobs
+// he tunes three synthesized radio stations (R), buys medkits, armor and shells
+// at the shops (1-5), and switches between the pistol, the shotgun, the SMG and
+// the rifle (Q). The game lives in game/ beside this
 // file: plain static files a desktop browser loads offline — game/index.html and
 // its ES modules, three.js vendored under game/, no library fetched and no network
 // request at runtime. This program hands the entry in: it copies game/ and

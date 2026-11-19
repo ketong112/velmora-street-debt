@@ -59,7 +59,9 @@ export const PED = {
   hitSpeed: 4, // a car slower than this only makes walkers flinch, never knocks one down
 };
 
-/** Police: foot cops at low heat, police cars at 3+ stars, busted when caught. */
+/** Police: foot cops at low heat, police cars at 3+ stars, busted when caught.
+ * Line of sight: a cop only spots Rook when the street between them is clear —
+ * a building in the way breaks the sightline, and the heat starts to drop. */
 export const POLICE = {
   footSpeed: 7.6,
   catchRadius: 1.4,
@@ -72,6 +74,11 @@ export const POLICE = {
   maxCars: 3,
   sightRange: 60,
   decayDelay: 12,
+  // Line of sight: how far apart the samples are along the sightline (2 m), and
+  // how long a last-seen position stays fresh for the hunt (8 s). After that the
+  // cops give up the chase and idle where they are.
+  losStep: 2,
+  lastSeenAge: 8,
   // The helicopter: circles over Rook at 4+ stars, its searchlight on him. It
   // spots him like a cop on the ground, so the heat does not decay while it is
   // overhead — four stars is a manhunt, not a misunderstanding.
@@ -247,7 +254,64 @@ export const SHOP_ITEMS = [
   { key: '3', id: 'ammo', label: 'Pistol ammo +12', price: 100 },
   { key: '4', id: 'shotgun', label: 'Shotgun (6 shells)', price: 800 },
   { key: '5', id: 'shells', label: 'Shotgun shells +6', price: 120 },
+  { key: '6', id: 'smg', label: 'SMG (30 rounds)', price: 600 },
+  { key: '7', id: 'smgAmmo', label: 'SMG mag +30', price: 150 },
+  { key: '8', id: 'rifle', label: 'Rifle (8 rounds)', price: 1200 },
+  { key: '9', id: 'rifleAmmo', label: 'Rifle rounds +8', price: 200 },
 ];
+
+/** The two new guns: the SMG sprays fast at close range, the rifle hits hard at distance. */
+export const WEAPONS = {
+  smg: {
+    name: 'SMG',
+    range: 22,
+    arc: 0.16, // a little wider than the pistol: spray, not aim
+    cooldown: 0.12, // near-automatic: hold G and it keeps firing
+    damage: 1,
+    magSize: 30,
+  },
+  rifle: {
+    name: 'Rifle',
+    range: 45, // the longest reach in the game: across the plaza
+    arc: 0.05, // a needle: miss by a hair and the round is gone
+    cooldown: 1.1, // slow, deliberate: one shot, then work the bolt
+    damage: 3, // drops a cop (2 HP) or an enforcer (3 HP) in one hit
+    magSize: 8,
+  },
+};
+
+/** The safehouse: Rook's own place on the north-west corner. Buy it once, then
+ * rest there — heal, save, and hide from the law (no line of sight reaches inside). */
+export const SAFEHOUSE = {
+  x: -25,
+  z: 75,
+  price: 2000,
+  doorRadius: 4.5,
+  healPerSecond: 25,
+  name: "ROOK'S PLACE",
+};
+
+/** The garage: tune the car parked in its bay — engine, armor, paint. The bay is
+ * the painted rectangle on the street in front of the garage door. */
+export const GARAGE = {
+  x: 75,
+  z: -75,
+  // The bay centre, on the street in front of the door (the door faces the plaza).
+  bayX: 70,
+  bayZ: -70,
+  bayRadius: 5,
+  doorRadius: 4.5,
+  name: 'VELMORA GARAGE',
+  enginePrices: [1500, 2500, 4000],
+  armorPrices: [1200, 2000, 3200],
+  paintPrice: 400,
+  maxLevel: 3,
+  // Each engine level: +12% top speed, +15% acceleration — and a spoiler at level 1+.
+  engineSpeed: 0.12,
+  engineAccel: 0.15,
+  // Each armor level: +50 max car HP, and the car is repaired to full on purchase.
+  armorHp: 50,
+};
 
 /** Mission 4, the smuggling run: pay on completion, and the timer's pace. */
 export const MISSION4 = {
@@ -266,6 +330,36 @@ export const MISSION5 = {
 export const MISSION6 = {
   payout: 8000,
   drops: 8,
+};
+
+/** Mission 7, the courier run: three parcels, one clock, pay on completion. */
+export const MISSION7 = {
+  payout: 4000,
+  stops: 3,
+  timePerMetre: 1 / 11,
+  timeBase: 30,
+};
+
+/** Mission 8, the harbor race: four checkpoints in order, pay on completion. */
+export const MISSION8 = {
+  payout: 5000,
+  checkpoints: 4,
+  timePerMetre: 1 / 13,
+  timeBase: 25,
+};
+
+/** Mission 9, the safehouse stand: waves of enforcers at Rook's door, pay on completion. */
+export const MISSION9 = {
+  payout: 6000,
+  waves: 5,
+  enforcersPerWave: 2,
+  defendRadius: 40, // stray farther than this from the safehouse and the wave waits
+};
+
+/** Mission 10, the final payment: drops, then the docks, pay on completion — the debt ends. */
+export const MISSION10 = {
+  payout: 5000,
+  drops: 10,
 };
 
 /** Enforcers: the Harbormaster's collectors, sent after Rook during the getaway. */

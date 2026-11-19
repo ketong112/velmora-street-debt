@@ -1,10 +1,11 @@
 // Shops: three storefronts on street corners, one shelf each. Walk up on foot and
-// press 1-5 to buy with collected cash: a medkit, body armor, pistol ammo, the
-// shotgun itself, or shells for it. The world calls tryBuy when a digit is pressed
-// near a shop; the HUD shows the shelf while Rook stands close. Nothing here
-// touches the DOM or the network — plain state in, plain result out.
+// press 1-9 to buy with collected cash: a medkit, body armor, pistol ammo, the
+// shotgun itself, or shells for it — and the two new guns, the SMG and the rifle,
+// with their magazines. The world calls tryBuy when a digit is pressed near a
+// shop; the HUD shows the shelf while Rook stands close. Nothing here touches
+// the DOM or the network — plain state in, plain result out.
 
-import { COMBAT, PLAYER, SHOP_ITEMS, SHOPS } from './config.js';
+import { COMBAT, PLAYER, SHOP_ITEMS, SHOPS, WEAPONS } from './config.js';
 
 // How close Rook must stand to a shop to buy from it.
 const SHOP_RADIUS = 4;
@@ -31,7 +32,7 @@ export function nearestShop(shops, x, z) {
 }
 
 /**
- * Buy shelf item `key` ('1'-'5') at `shop`. Returns { ok, text } — ok when the
+ * Buy shelf item `key` ('1'-'9') at `shop`. Returns { ok, text } — ok when the
  * cash covered it and the item applied, text the line the HUD should toast.
  * A purchase that cannot apply (no pistol for its ammo, no shotgun for its
  * shells, a shotgun already owned, full health, full armor) is refused without
@@ -57,10 +58,23 @@ export function buyItem(state, shop, key) {
   if (item.id === 'shells' && !combat.hasShotgun) {
     return { ok: false, text: 'No shotgun yet — buy the gun first.' };
   }
+  if (item.id === 'smg' && combat.hasSmg) {
+    return { ok: false, text: 'You already own the SMG.' };
+  }
+  if (item.id === 'smgAmmo' && !combat.hasSmg) {
+    return { ok: false, text: 'No SMG yet — buy the gun first.' };
+  }
+  if (item.id === 'rifle' && combat.hasRifle) {
+    return { ok: false, text: 'You already own the rifle.' };
+  }
+  if (item.id === 'rifleAmmo' && !combat.hasRifle) {
+    return { ok: false, text: 'No rifle yet — buy the gun first.' };
+  }
   if (state.cash < item.price) {
     return { ok: false, text: `Need $${item.price} — you have $${state.cash}.` };
   }
   state.cash -= item.price;
+  if (state.ledger) state.ledger.spent += item.price;
   if (item.id === 'health') player.health = PLAYER.maxHealth;
   else if (item.id === 'armor') player.armor = Math.min(PLAYER.armorMax, player.armor + 50);
   else if (item.id === 'ammo') combat.ammo += 12;
@@ -69,5 +83,15 @@ export function buyItem(state, shop, key) {
     combat.shells += COMBAT.shotgunShellsPerBuy;
     combat.weapon = 'shotgun';
   } else if (item.id === 'shells') combat.shells += COMBAT.shotgunShellsPerBuy;
+  else if (item.id === 'smg') {
+    combat.hasSmg = true;
+    combat.smgAmmo += WEAPONS.smg.magSize;
+    combat.weapon = 'smg';
+  } else if (item.id === 'smgAmmo') combat.smgAmmo += WEAPONS.smg.magSize;
+  else if (item.id === 'rifle') {
+    combat.hasRifle = true;
+    combat.rifleAmmo += WEAPONS.rifle.magSize;
+    combat.weapon = 'rifle';
+  } else if (item.id === 'rifleAmmo') combat.rifleAmmo += WEAPONS.rifle.magSize;
   return { ok: true, text: `Bought ${item.label} — $${item.price}.` };
 }

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="VELMORA — Street Debt: an open-world crime game. Rook Marlowe owes the Harbormaster fifty grand — collect cash drops, steal cars, outrun the law and a police helicopter, tune the radio, shop for guns, and pay it down across six missions in Port Velmora.">
+<meta name="description" content="VELMORA — Street Debt: an open-world crime game. Rook Marlowe owes the Harbormaster fifty grand — collect cash drops, steal cars, outrun the law and a police helicopter, tune the radio, shop for four guns, buy a safehouse, tune cars in the garage, and pay it down across ten missions in Port Velmora.">
 <link rel="icon" href="data:,">
 <title>VELMORA — Street Debt</title>
 <style>
@@ -20,6 +20,7 @@
   #hud-cash.bump { animation: bump 0.25s ease-out; }
   @keyframes bump { 0% { transform: scale(1.18); } 100% { transform: scale(1); } }
   #hud-debt { font-size: clamp(12px, 1.4vw, 15px); color: #c8ccd4; text-shadow: 0 1px 4px rgba(0,0,0,0.8); margin-top: 2px; }
+  #hud-ledger { font-size: clamp(11px, 1.3vw, 13px); color: #9ecbff; text-shadow: 0 1px 4px rgba(0,0,0,0.8); margin-top: 2px; }
   #hud-health { margin-top: 10px; display: flex; align-items: center; gap: 8px; }
   #hud-health-label { font-size: 13px; font-weight: 700; text-shadow: 0 1px 4px rgba(0,0,0,0.8); }
   #hud-health-bar { width: min(180px, 30vw); height: 12px; background: rgba(0,0,0,0.55); border: 1px solid rgba(255,255,255,0.35); border-radius: 6px; overflow: hidden; }
@@ -44,8 +45,14 @@
   #hud-arrow.show { opacity: 0.95; }
   #hud-ammo { margin-top: 6px; font-size: 14px; font-weight: 700; color: #ffd166; text-shadow: 0 1px 4px rgba(0,0,0,0.8); }
   #hud-radio { margin-top: 4px; font-size: 13px; font-weight: 700; color: #9ecbff; text-shadow: 0 1px 4px rgba(0,0,0,0.8); }
-  #hud-shop { position: absolute; bottom: max(16px, env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%); font-size: clamp(12px, 1.4vw, 14px); font-weight: 700; color: #ffb347; text-shadow: 0 1px 4px rgba(0,0,0,0.8); background: rgba(12,16,24,0.72); border: 1px solid rgba(255,179,71,0.5); border-radius: 8px; padding: 8px 14px; opacity: 0; transition: opacity 0.25s ease; white-space: nowrap; max-width: 94vw; overflow: hidden; text-overflow: ellipsis; }
+  #hud-shop { position: absolute; bottom: max(16px, env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%); font-size: clamp(12px, 1.4vw, 14px); font-weight: 700; color: #ffb347; text-shadow: 0 1px 4px rgba(0,0,0,0.8); background: rgba(12,16,24,0.72); border: 1px solid rgba(255,179,71,0.5); border-radius: 8px; padding: 8px 14px; opacity: 0; transition: opacity 0.25s ease; max-width: 94vw; text-align: center; line-height: 1.7; }
   #hud-shop.show { opacity: 1; }
+  #hud-place { position: absolute; bottom: max(72px, env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%); font-size: clamp(12px, 1.4vw, 14px); font-weight: 700; color: #37d67a; text-shadow: 0 1px 4px rgba(0,0,0,0.8); background: rgba(12,16,24,0.72); border: 1px solid rgba(55,214,122,0.5); border-radius: 8px; padding: 8px 14px; opacity: 0; transition: opacity 0.25s ease; white-space: nowrap; max-width: 94vw; overflow: hidden; text-overflow: ellipsis; }
+  #hud-place.show { opacity: 1; }
+  #hud-garage { position: absolute; bottom: max(72px, env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%); font-size: clamp(12px, 1.4vw, 14px); font-weight: 700; color: #9ecbff; text-shadow: 0 1px 4px rgba(0,0,0,0.8); background: rgba(12,16,24,0.82); border: 1px solid rgba(158,203,255,0.5); border-radius: 8px; padding: 10px 16px; opacity: 0; transition: opacity 0.25s ease; max-width: 94vw; text-align: center; line-height: 1.7; white-space: pre-line; }
+  #hud-garage.show { opacity: 1; }
+  #hud-safehouse { position: absolute; bottom: max(72px, env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%); font-size: clamp(12px, 1.4vw, 14px); font-weight: 700; color: #ffd166; text-shadow: 0 1px 4px rgba(0,0,0,0.8); background: rgba(12,16,24,0.82); border: 1px solid rgba(255,209,102,0.5); border-radius: 8px; padding: 10px 16px; opacity: 0; transition: opacity 0.25s ease; max-width: 94vw; text-align: center; line-height: 1.7; white-space: pre-line; }
+  #hud-safehouse.show { opacity: 1; }
   /* Below the toast: the toast sits at 72px and runs ~40px tall, so a timer at 88px
      would sit on top of a toast like "Parcel secured" — 120px clears it. */
   #hud-timer { position: absolute; top: max(120px, env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); font-size: clamp(18px, 2.2vw, 24px); font-weight: 800; color: #f2c94c; text-shadow: 0 2px 8px rgba(0,0,0,0.7); opacity: 0; transition: opacity 0.25s ease; }
@@ -87,6 +94,7 @@
   <div class="hud-box" id="hud-left">
     <div id="hud-cash">$0</div>
     <div id="hud-debt">Debt $50,000 left</div>
+    <div id="hud-ledger"></div>
     <div id="hud-health">
       <span id="hud-health-label">HP</span>
       <div id="hud-health-bar"><div id="hud-health-fill"></div></div>
@@ -106,6 +114,9 @@
   <div id="hud-timer"></div>
   <div id="hud-toast"></div>
   <div id="hud-shop"></div>
+  <div id="hud-place"></div>
+  <div id="hud-garage"></div>
+  <div id="hud-safehouse"></div>
   <div id="hud-map-wrap"><canvas id="hud-minimap" width="180" height="180"></canvas></div>
 </div>
 
@@ -117,8 +128,8 @@
     streets of Port Velmora — collect the green cash bundles, stay on your feet, pay it down.</p>
     <div class="controls">
       <b>W A S D</b> move / drive &nbsp;·&nbsp; <b>Mouse</b> look &nbsp;·&nbsp; <b>Shift</b> sprint<br>
-      <b>E</b> steal / exit car &nbsp;·&nbsp; <b>F</b> punch &nbsp;·&nbsp; <b>G</b> fire &nbsp;·&nbsp; <b>Q</b> switch gun<br>
-      <b>R</b> radio &nbsp;·&nbsp; <b>1–5</b> buy at a shop &nbsp;·&nbsp; <b>M</b> mute &nbsp;·&nbsp; <b>P</b> or <b>Esc</b> pause
+      <b>E</b> steal / exit car, safehouse &amp; garage &nbsp;·&nbsp; <b>F</b> punch &nbsp;·&nbsp; <b>G</b> fire &nbsp;·&nbsp; <b>Q</b> switch gun<br>
+      <b>R</b> radio &nbsp;·&nbsp; <b>1–9</b> buy at a shop &nbsp;·&nbsp; <b>1–3</b> tune at the garage &nbsp;·&nbsp; <b>M</b> mute &nbsp;·&nbsp; <b>P</b> or <b>Esc</b> pause
     </div>
     <button id="btn-continue" class="hidden" type="button">Continue</button>
     <div class="prompt">Click or press Space to play</div>

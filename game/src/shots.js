@@ -1,14 +1,16 @@
-// The screenshot scenes behind ?shot=start|play|end|drive|chase|mission|cover|combat.
+// The screenshot scenes behind ?shot=start|play|end|drive|chase|mission|cover|combat|garage|safehouse.
 // Each one plays the real rules forward from a fresh world for a fixed number of
 // steps, steered by a simple autopilot (walk toward a target, enter a car, drive),
 // so the frame is what a short game really looks like and the same seed always
 // gives the same frame. Each scene also returns the camera the renderer should
 // use, so a shot never depends on the mouse.
 
-import { STEP } from './config.js';
+import { GARAGE, SAFEHOUSE, STEP } from './config.js';
 import { createRandom } from './random.js';
 import { spawnEnforcers, tryFire } from './combat.js';
 import { missionObjective } from './missions.js';
+import { buyUpgrade, openGarage } from './garage.js';
+import { useSafehouse } from './safehouse.js';
 import { SCREEN_PLAY, SCREEN_TITLE } from './render.js';
 
 const START_SECONDS = 5;
@@ -140,7 +142,7 @@ function chaseCamera(p) {
  */
 export function stageShot(name, world) {
   world.reset();
-  if (name !== 'play' && name !== 'end' && name !== 'drive' && name !== 'chase' && name !== 'mission' && name !== 'cover' && name !== 'combat') {
+  if (name !== 'play' && name !== 'end' && name !== 'drive' && name !== 'chase' && name !== 'mission' && name !== 'cover' && name !== 'combat' && name !== 'garage' && name !== 'safehouse') {
     for (let index = 0; index < START_SECONDS / STEP; index += 1) {
       world.step(STEP, 0, 0, Math.PI, false, true);
     }
@@ -166,7 +168,9 @@ export function stageShot(name, world) {
       world.step(STEP, 0, 1, camYaw, false, false);
     }
     // The $1,500 is in: the mission flips to "return to the plaza" and the beacon moves there.
+    // The ledger earns it too, so the debt line reads $48,500 — the cash is earned, not staged.
     world.state.cash = 1500;
+    world.state.ledger.earned = 1500;
     for (let index = 0; index < 30; index += 1) {
       world.step(STEP, 0, 0, camYaw, false, false);
     }
@@ -182,6 +186,67 @@ export function stageShot(name, world) {
       screen: SCREEN_PLAY,
       best: world.state.cash,
       view: chaseCamera(p),
+    };
+  }
+
+  if (name === 'garage') {
+    // The garage shot: Rook on foot beside the starter car in the bay, the
+    // garage menu open with an engine tune already bought — the spoiler on the
+    // car proves the tune, the menu shows the next prices, the blue diamond
+    // bobs over the door. The camera looks down the -75 street at the garage
+    // front, so no building can fill the frame.
+    const s = world.state;
+    s.cash = 9000;
+    s.ledger.earned = 9000; // the cash is earned, so the debt line reads $41,000
+    const car = s.cars[s.cars.length - 1]; // the starter car
+    car.x = GARAGE.bayX;
+    car.z = GARAGE.bayZ;
+    car.heading = Math.atan2(GARAGE.x - car.x, GARAGE.z - car.z);
+    car.speed = 0;
+    s.player.x = 68;
+    s.player.z = -72;
+    s.player.heading = Math.atan2(car.x - s.player.x, car.z - s.player.z);
+    s.player.speed = 0;
+    openGarage(s, car);
+    // One engine tune, bought for real through the garage: the spoiler appears
+    // and the menu shows Lv 1 with the next price.
+    buyUpgrade(s, '1');
+    s.objective = missionObjective(s.missions, s);
+    return {
+      screen: SCREEN_PLAY,
+      best: s.cash,
+      view: {
+        mode: 'fixed',
+        pos: [52, 5.5, -75],
+        target: [74, 1.5, -74],
+      },
+    };
+  }
+
+  if (name === 'safehouse') {
+    // The safehouse shot: Rook's place, bought and rested in — the green
+    // diamond over the door, the warm windows, the panel with the ledger
+    // summary. Rook stands at his own door. The camera looks up the -25
+    // street at the house front.
+    const s = world.state;
+    s.cash = 5000;
+    s.ledger.earned = 5000; // the cash is earned, so the debt line reads $45,000
+    s.player.x = -23;
+    s.player.z = 73;
+    s.player.heading = Math.atan2(SAFEHOUSE.x - s.player.x, SAFEHOUSE.z - s.player.z);
+    s.player.speed = 0;
+    s.player.health = 60; // resting from a hard night: the panel says HP restoring
+    useSafehouse(s); // buys the place for $2,000
+    useSafehouse(s); // steps inside: heals, autosaves, counts the visit
+    s.objective = missionObjective(s.missions, s);
+    return {
+      screen: SCREEN_PLAY,
+      best: s.cash,
+      view: {
+        mode: 'fixed',
+        pos: [-25, 6, 52],
+        target: [-25, 1.5, 74],
+      },
     };
   }
 
@@ -312,6 +377,7 @@ export function stageShot(name, world) {
     s.player.z = car.z;
     s.player.heading = car.heading;
     s.cash = 9000;
+    s.ledger.earned = 9000; // the cash is earned, so the debt line reads $41,000
     mission.phase = 'deliver';
     mission.timeLeft = 38;
     s.combat.hasPackage = true;

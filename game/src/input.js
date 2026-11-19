@@ -27,7 +27,7 @@ const FIRE = new Set(['KeyG']);
 const MUTE = new Set(['KeyM']);
 const RADIO = new Set(['KeyR']);
 const WEAPON = new Set(['KeyQ']);
-const BUY = new Set(['Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5']);
+const BUY = new Set(['Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5', 'Digit6', 'Digit7', 'Digit8', 'Digit9']);
 
 // The camera starts slightly above level, looking down the avenue a touch.
 const START_PITCH = 0.22;
@@ -69,7 +69,9 @@ export function createInput(target) {
       if (!event.repeat) actions |= ACTION_WEAPON;
       event.preventDefault();
     } else if (BUY.has(event.code)) {
-      // Digits are the shop shelf: 1-5 buys that item when Rook stands at a shop.
+      // Digits are the shop shelf (1-9) and the garage menu (1-3): 1-5 buys that
+      // item when Rook stands at a shop, 6-9 buys the two new guns and their
+      // rounds, and 1-3 buys a tune when the garage menu is open.
       // They are a separate one-shot queue (not an ACTION flag) so the loop knows
       // WHICH shelf was pressed, and a press away from a shop simply does nothing.
       if (!event.repeat) buyDigit = Number(event.code.slice(5));
